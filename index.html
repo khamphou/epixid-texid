@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TEXID</title>
+    <meta name="description" content="Tetris moderne thème acier/carbone avec score, top 10, sons et effets visuels." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+    <!-- Écran de démarrage (héro animé) -->
+    <section id="screen-start" class="screen active">
+      <div class="hero">
+        <canvas id="hero-bg" class="hero-bg" aria-hidden="true"></canvas>
+        <div class="hero-veil"></div>
+        <canvas id="hero-fx" class="hero-fx" aria-hidden="true"></canvas>
+        <div class="hero-content">
+          <div class="logo-wrap" aria-label="TEXID">
+            <!-- Logo image (fourni par l'utilisateur). Si l'image n'est pas présente, on garde le fallback SVG -->
+            <img width="200" src="assets/images/logo-texid.png" alt="TEXID" class="logo-img" onload="this.style.display='block'; this.nextElementSibling?.classList.add('hidden');" onerror="this.style.display='none'; this.nextElementSibling?.classList.remove('hidden');" />
+            <svg class="logo hidden" viewBox="0 0 680 180" role="img" aria-labelledby="logo-title">
+              <title id="logo-title">TEXID</title>
+              <defs>
+                <linearGradient id="g" x1="0" x2="1">
+                  <stop offset="0%" stop-color="#7dd3fc"/>
+                  <stop offset="100%" stop-color="#38bdf8"/>
+                </linearGradient>
+                <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+                  <feGaussianBlur stdDeviation="4" result="b"/>
+                  <feMerge>
+                    <feMergeNode in="b"/>
+                    <feMergeNode in="SourceGraphic"/>
+                  </feMerge>
+                </filter>
+              </defs>
+              <text x="50%" y="58%" text-anchor="middle" class="logo-fill">TEXID</text>
+              <text x="50%" y="58%" text-anchor="middle" class="logo-stroke">TEXID</text>
+            </svg>
+          </div>
+          <p class="subtitle">Un Tetris reloaded: rythme, synchro parfaite en multi, et effets explosifs.</p>
+          <div class="hero-actions">
+            <button id="btn-start-solo" class="btn primary lg">Solo</button>
+            <button id="btn-start-multi" class="btn lg">Multijoueur</button>
+            <button id="btn-hero-top10" class="btn lg ghost">Top 10</button>
+          </div>
+          <p class="start-tip"></p>
+        </div>
+        <div class="hero-footer" title="Infos développeur">
+          <span class="hf-line">Powered by Kham</span>
+          <span class="hf-sep">•</span>
+          <span class="hf-line">Epixid</span>
+          <span class="hf-sep">•</span>
+          <span class="hf-line">08‑08‑2025</span>
+          <span class="hf-sep">•</span>
+          <span class="hf-line">v1.0</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Écran rejoindre -->
+    <section id="screen-join" class="screen">
+      <div class="join-wrap">
+        <h2>Multijoueurs</h2>
+        <div class="join-layout">
+          <div class="join-main">
+            <div class="join-panel">
+              <div class="join-panel-header">
+                <div class="join-tabs">
+                  <button id="tab-rooms" class="tab active">Salons</button>
+                  <button id="tab-players" class="tab">Joueurs</button>
+                </div>
+                <div class="join-actions">
+                  <button id="btn-join-create" class="btn primary">Créer un salon</button>
+                  <button id="btn-join-back" class="btn ghost sm" title="Retour à l'accueil">⟵ Accueil</button>
+                </div>
+              </div>
+              <div class="join-panel-body">
+                <ul id="rooms-join" class="rooms"></ul>
+                <ul id="players-join" class="players"></ul>
+                <div id="join-empty" class="empty-state hidden">Aucun élément à afficher.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="join-summary-band">
+          <div id="rooms-summary" class="rooms-summary">Salons: – • Joueurs connectés: – • Parties en cours: –</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Écran de jeu -->
+    <div id="app" class="screen">
+  <header class="topbar">
+  <div class="brand"><h1 class="app-title">TEXID</h1></div>
+        <div class="controls">
+          <button id="btn-new" class="btn">Nouvelle partie</button>
+          <button id="btn-leaderboard" class="btn">Top 10</button>
+          <button id="btn-help" class="btn" title="Aide et contrôles">Aide</button>
+          <button id="btn-mp-leave" class="btn" title="Quitter le salon">Quitter</button>
+          <label class="toggle" title="Affiche le meilleur point de chute (avec anticipation de la prochaine pièce)">
+            <input type="checkbox" id="easy-toggle" />
+            <span>Mode Easy</span>
+          </label>
+        </div>
+      </header>
+
+  <main class="layout">
+        <section class="boards">
+          <div id="wait-banner" class="wait hidden">En attente d'un joueur…</div>
+          <div class="board-wrap">
+            <div class="frame">
+              <canvas id="game" width="300" height="600" aria-label="Grille de jeu"></canvas>
+              <canvas id="fx" width="300" height="600" class="fx" aria-hidden="true"></canvas>
+            </div>
+          </div>
+          <div class="board-wrap">
+            <div class="frame">
+              <canvas id="opp" width="300" height="600" aria-label="Grille adverse"></canvas>
+            </div>
+            <div class="hint"><span id="opp-label">Adversaire</span></div>
+          </div>
+          <!-- Overlay compte à rebours avec annulation -->
+          <div id="countdown-overlay" class="countdown hidden" role="dialog" aria-live="polite">
+            <div class="countdown-box">
+              <div class="countdown-text"><span id="countdown-text">5</span></div>
+              <button id="btn-cancel-countdown" class="btn">Annuler</button>
+            </div>
+          </div>
+        </section>
+
+        <aside class="sidebar">
+          <div class="panel status">
+            <div class="stat"><span>Niveau</span><strong id="level">1 — Pepouz</strong></div>
+            <div class="stat big"><span>Score</span><strong id="score">0</strong></div>
+          </div>
+
+          <div class="panel next">
+            <h2>Prochaines pièces</h2>
+            <div class="next-wrap">
+              <canvas id="next" width="120" height="120"></canvas>
+              <canvas id="next2" width="120" height="120"></canvas>
+            </div>
+          </div>
+
+
+          <div id="panel-mp" class="panel board">
+            <h2>Multijoueur</h2>
+            <div class="mp-players">
+              <div>Moi: <span id="me-ready" class="badge">Pas prêt</span></div>
+              <div>Adversaire: <span id="opp-ready" class="badge">Pas prêt</span></div>
+            </div>
+            <ul id="players-list" class="players-list"></ul>
+          </div>
+        </aside>
+      </main>
+
+      <footer class="bottombar">
+        <span id="player-tag">Joueur: <strong id="player-name">–</strong></span>
+  <span id="room-tag" class="hidden">Salon: <strong id="room-id">–</strong></span>
+        <span>Thème: acier & carbone</span>
+  <span class="credits">Crédits : Kham — Epixid</span>
+      </footer>
+    </div>
+
+    <!-- Modales -->
+    <dialog id="dlg-name" class="modal">
+      <form method="dialog" class="modal-content" id="form-name">
+        <h3>Entrez votre nom</h3>
+        <input id="input-name" name="name" type="text" maxlength="16" placeholder="Votre pseudo" autofocus required />
+        <menu>
+          <button type="button" value="cancel">Annuler</button>
+          <button type="submit" value="default" class="primary">Valider</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="dlg-gameover" class="modal">
+      <div class="modal-content">
+        <h3>Game Over</h3>
+  <p>Score: <strong id="final-score">0</strong></p>
+  <p>Score adverse: <strong id="opp-final-score">–</strong></p>
+        <menu>
+          <button id="go-new" class="primary">Rejouer</button>
+          <button id="go-close">Fermer</button>
+        </menu>
+      </div>
+    </dialog>
+
+    <dialog id="dlg-result" class="modal">
+      <div class="modal-content">
+        <h3>Résultat du match</h3>
+        <div id="result-lines">–</div>
+        <menu>
+          <button id="res-replay" class="primary">Rejouer</button>
+          <button id="res-leave">Quitter le salon</button>
+        </menu>
+      </div>
+    </dialog>
+
+    <dialog id="dlg-confirm-leave" class="modal">
+      <div class="modal-content">
+        <h3>Quitter</h3>
+        <p>Quitter le salon et revenir à l’écran de titre ?</p>
+        <menu>
+          <button id="cancel-leave">Annuler</button>
+          <button id="confirm-leave" class="primary">Quitter</button>
+        </menu>
+      </div>
+    </dialog>
+
+    <dialog id="dlg-top10" class="modal">
+      <div class="modal-content">
+        <h3>Top 10</h3>
+        <ol id="top10-modal" class="top10"></ol>
+        <menu>
+          <button id="top10-close" class="primary">Fermer</button>
+        </menu>
+      </div>
+    </dialog>
+
+  <script type="module" src="/src/main.js"></script>
+
+  <!-- Modale Top 10 (héro stylé) -->
+  <dialog id="dlg-top10-hero" class="modal hero-top10">
+    <div class="modal-content">
+      <div class="hero-top10-header">
+        <h3>Top 10</h3>
+        <button id="top10-hero-close" class="btn">Fermer</button>
+      </div>
+      <div class="hero-top10-body">
+        <ol id="top10-hero-list" class="top10 neon"></ol>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Modale Aide / Contrôles -->
+  <dialog id="dlg-help" class="modal">
+    <div class="modal-content">
+      <h3>Aide & Contrôles</h3>
+      <div class="help-body">
+        <ul>
+          <li>← →: déplacer</li>
+          <li>↑: rotation</li>
+          <li>↓: descente</li>
+          <li>Espace: chute</li>
+          <li>P: pause</li>
+        </ul>
+        <p class="small">Astuce: activez le Mode Easy pour les guides de projection.</p>
+      </div>
+      <menu>
+        <button id="help-close" class="primary">Fermer</button>
+      </menu>
+    </div>
+  </dialog>
+  </body>
+  </html>

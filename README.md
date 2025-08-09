@@ -31,6 +31,25 @@ npm run build
 npm run preview
 ```
 
+## Déploiement Netlify
+
+Frontend (Vite) est statique et déployé sur Netlify; le backend WebSocket tourne ailleurs (Render/Railway/Fly.io, etc.).
+
+1. Poussez le repo et créez un site Netlify (New site from Git).
+2. Build command: `npm run build` — Publish directory: `dist`.
+3. Ajoutez la variable d'env `VITE_SERVER_ORIGIN` dans Netlify (Site settings > Build & deploy > Environment) avec l'URL complète de votre backend (sans slash final), par ex:
+	- `https://texid-backend.onrender.com`
+4. Déployez.
+
+Le fichier `netlify.toml` fournit:
+- Un fallback SPA (`/*` -> `/index.html` 200)
+- Des headers cache pour `/assets/*`
+
+### Backend (server.js)
+Ce dépôt contient `server.js` (Express + ws) pour gérer salons, WS, et le Top 10 (persisté dans `leaderboard.json`). Déployez-le sur un PaaS Node avec websockets activés (Render/Railway/Fly.io). Exposez HTTPS et laissez `PORT` fourni par la plateforme (déjà géré).
+
+Ensuite, réglez `VITE_SERVER_ORIGIN` côté Netlify pour pointer sur ce backend.
+
 ## Notes
 - Les scores sont stockés dans `localStorage` sous la clé `tetris_top10_v1`.
 - Les assets audio sont synthétisés via WebAudio, pas de fichiers externes.

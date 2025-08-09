@@ -44,10 +44,19 @@ function rotateCW(m){
 }
 
 // Leaderboard côté serveur
+// Origine du serveur (HTTP/WS):
+// - En production Netlify: définir VITE_SERVER_ORIGIN (ex: https://mon-backend.example.com)
+// - En développement: fallback vers localhost:8787
+function getServerOrigin(){
+  try{
+    const cfg = (import.meta && import.meta.env && import.meta.env.VITE_SERVER_ORIGIN) || '';
+    if(cfg){ return String(cfg).replace(/\/$/,''); }
+  }catch{}
+  return `${location.protocol}//${location.hostname}:8787`;
+}
 async function apiTop10List(){
   try{
-    const host = getServerHost();
-    const base = `${location.protocol}//${host}:8787`;
+  const base = getServerOrigin();
     const res = await fetch(`${base}/top10`, { cache:'no-store' });
     const data = await res.json();
     return Array.isArray(data.list)? data.list : [];
@@ -55,8 +64,7 @@ async function apiTop10List(){
 }
 async function apiTop10Push(name, score){
   try{
-    const host = getServerHost();
-    const base = `${location.protocol}//${host}:8787`;
+  const base = getServerOrigin();
     const sc = Math.max(0, Number(score||0));
     await fetch(`${base}/top10`, { method:'POST', headers:{ 'Content-Type': 'application/json' }, body: JSON.stringify({ name, score: sc }) });
   }catch{}
@@ -864,6 +872,83 @@ function togglePause(){
   else { ensureMusicMode(); requestAnimationFrame(step); }
 }
 
+// ======== Contrôles souris/pointeur (gestes type mobile) ========
+// Gestes sur le canvas principal: 
+// - Tap court: rotation
+// - Glisser gauche/droite: déplacements par pas (seuil)
+// - Glisser vers le bas: soft drop progressif
+// - Flick rapide vers le bas: hard drop
+;(function setupPointerControls(){
+  if(!cvs) return;
+  try{ cvs.style.touchAction = 'none'; }catch{}
+  let pid = null;
+  let pActive = false;
+  let startX=0, startY=0, lastX=0, lastY=0, startT=0;
+  let accX=0, accY=0; // accumulateurs pour pas de déplacement
+  const TAP_MS = 220;
+  const TAP_DIST = 12; // px
+  const H_STEP = 20; // px par pas horizontal
+  const V_STEP = 26; // px par soft drop
+  const FLICK_MIN_DY = 60; // px
+  const FLICK_MIN_V = 0.8; // px/ms
+
+  function canControl(){
+    // Autoriser si l’écran jeu est actif et qu’on n’est pas en pause
+    if(paused) return false;
+    if(!active) return false;
+    const isGame = !!(screenGame && screenGame.classList && screenGame.classList.contains('active'));
+    return isGame;
+  }
+
+  function onDown(ev){
+    if(!canControl()) return;
+    try{ cvs.setPointerCapture(ev.pointerId); pid = ev.pointerId; }catch{}
+    pActive = true; startX = lastX = ev.clientX; startY = lastY = ev.clientY; startT = performance.now();
+    accX = 0; accY = 0;
+    // éviter le scroll/bounce
+    try{ ev.preventDefault(); }catch{}
+  }
+  function onMove(ev){
+    if(!pActive || (pid!==null && ev.pointerId!==pid)) return;
+    if(!canControl()) return;
+    const dx = ev.clientX - lastX; const dy = ev.clientY - lastY;
+    lastX = ev.clientX; lastY = ev.clientY;
+    accX += dx; accY += dy;
+    // Déplacements horizontaux par pas
+    while(Math.abs(accX) >= H_STEP){
+      if(accX > 0){ move(1); accX -= H_STEP; }
+      else { move(-1); accX += H_STEP; }
+    }
+    // Soft drop progressif en glisser
+    while(accY >= V_STEP){ softDrop(); accY -= V_STEP; }
+    try{ ev.preventDefault(); }catch{}
+  }
+  function onUp(ev){
+    if(!pActive || (pid!==null && ev.pointerId!==pid)) return;
+    const dt = Math.max(1, performance.now() - startT);
+    const totalDX = ev.clientX - startX; const totalDY = ev.clientY - startY;
+    // Tap court -> rotation
+    const dist2 = totalDX*totalDX + totalDY*totalDY;
+    if(dt <= TAP_MS && dist2 <= (TAP_DIST*TAP_DIST)){
+      rotate();
+    } else {
+      // Flick bas rapide -> hard drop
+      const vy = totalDY / dt; // px/ms
+      if(totalDY >= FLICK_MIN_DY && vy >= FLICK_MIN_V){
+        hardDrop();
+      }
+    }
+    try{ cvs.releasePointerCapture(ev.pointerId); }catch{}
+    pActive = false; pid = null;
+    accX = accY = 0;
+    try{ ev.preventDefault(); }catch{}
+  }
+  cvs.addEventListener('pointerdown', onDown, { passive:false });
+  cvs.addEventListener('pointermove', onMove, { passive:false });
+  cvs.addEventListener('pointerup', onUp, { passive:false });
+  cvs.addEventListener('pointercancel', onUp, { passive:false });
+})();
+
 // Boutons UI
 document.getElementById('btn-new').addEventListener('click', async ()=>{
   await askName();
@@ -1113,16 +1198,16 @@ function sanitizeHost(v){
           .trim();
 }
 
-function getServerHost(){
-  return location.hostname;
-}
+// getServerHost n'est plus utilisé; conserver pour compat si référencé
+function getServerHost(){ return location.hostname; }
 
 function connectWS(){
   if(ws && ws.readyState===1) return;
   if(wsConnecting) return; wsConnecting = true;
   try{
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    ws = new WebSocket(`${proto}://${getServerHost()}:8787`);
+    const httpOrigin = getServerOrigin();
+    const wsUrl = httpOrigin.replace(/^http(s?):\/\//i, 'ws$1://');
+    ws = new WebSocket(wsUrl);
     ws.onopen = ()=>{
       // envoyer le nom et démarrer le heartbeat
   try{ ws.send(JSON.stringify({ type:'hello', name: playerName||'Player', cid: connId, pid: playerId })); }catch{}
@@ -1337,9 +1422,8 @@ function leaveRoom(){
 
 async function fetchRoomsJoin(){
   try{
-    // Utilise l'hôte configuré (champ Serveur) pour interroger directement l'API
-    const host = getServerHost();
-    const base = `${location.protocol}//${host}:8787`;
+  // Utilise l'origine serveur configurée (VITE_SERVER_ORIGIN en prod)
+  const base = getServerOrigin();
     const res = await fetch(`${base}/rooms`, { cache:'no-store' });
     const data = await res.json();
     renderRoomsJoin(data.rooms||[]);
@@ -1351,8 +1435,7 @@ async function fetchRoomsJoin(){
 
 async function fetchPlayersJoin(){
   try{
-    const host = getServerHost();
-    const base = `${location.protocol}//${host}:8787`;
+  const base = getServerOrigin();
     const res = await fetch(`${base}/players`, { cache:'no-store' });
     const data = await res.json();
   joinPlayersCache = Array.isArray(data.players)? data.players : [];

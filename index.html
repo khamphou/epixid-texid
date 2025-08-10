@@ -41,7 +41,7 @@
               <text x="50%" y="58%" text-anchor="middle" class="logo-stroke">TEXID</text>
             </svg>
           </div>
-          <p class="subtitle">Un Tetris reloaded: rythme, synchro parfaite en multi, et effets explosifs.</p>
+          <p class="subtitle">Un Tetris : rythme, synchro parfaite en multi, et effets explosifs.</p>
           <div class="hero-actions">
             <button id="btn-start-solo" class="btn primary lg">Solo</button>
             <button id="btn-start-multi" class="btn lg">Multijoueur</button>
@@ -111,13 +111,13 @@
   <main class="layout">
         <section class="boards">
           <div id="wait-banner" class="wait hidden">En attente d'un joueur…</div>
-          <div class="board-wrap">
+          <div class="board-wrap" id="board-me">
             <div class="frame">
               <canvas id="game" width="300" height="600" aria-label="Grille de jeu"></canvas>
               <canvas id="fx" width="300" height="600" class="fx" aria-hidden="true"></canvas>
             </div>
           </div>
-          <div class="board-wrap">
+          <div class="board-wrap" id="board-opp">
             <div class="frame">
               <canvas id="opp" width="300" height="600" aria-label="Grille adverse"></canvas>
             </div>
@@ -139,11 +139,16 @@
           </div>
 
           <div class="panel next">
-            <h2>Prochaines pièces</h2>
+            <h2>Blocs</h2>
             <div class="next-wrap">
               <canvas id="next" width="120" height="120"></canvas>
               <canvas id="next2" width="120" height="120"></canvas>
             </div>
+          </div>
+
+          <div class="panel opp-preview">
+            <h2>Adversaire</h2>
+            <canvas id="opp-mini" width="120" height="240" aria-label="Aperçu adversaire"></canvas>
           </div>
 
 
@@ -156,13 +161,13 @@
             <ul id="players-list" class="players-list"></ul>
           </div>
         </aside>
+        <!-- Panneaux sous le plateau (mobile): statut + multijoueur -->
+        <section id="under-panels" class="under-panels"></section>
       </main>
 
       <footer class="bottombar">
         <span id="player-tag">Joueur: <strong id="player-name">–</strong></span>
-  <span id="room-tag" class="hidden">Salon: <strong id="room-id">–</strong></span>
-        <span>Thème: acier & carbone</span>
-  <span class="credits">Crédits : Kham — Epixid</span>
+        <span id="room-tag" class="hidden">Salon: <strong id="room-id">–</strong></span>
       </footer>
     </div>
 

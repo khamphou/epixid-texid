@@ -3,7 +3,7 @@ import { AudioFX } from './audio.js';
 // Constantes jeu
 const COLS = 10;
 const ROWS = 20;
-const TILE = 30; // pixels
+let TILE = 30; // pixels (ajustable)
 const START_SPEED_MS = 800; // intervalle de chute initial
 const SPEEDUP_EVERY_MS = 30000; // +vite toutes les 30s
 // Système de 10 niveaux nommés
@@ -62,11 +62,12 @@ async function apiTop10List(){
     return Array.isArray(data.list)? data.list : [];
   }catch{ return []; }
 }
-async function apiTop10Push(name, score){
+async function apiTop10Push(name, score, durationMs){
   try{
   const base = getServerOrigin();
-    const sc = Math.max(0, Number(score||0));
-    await fetch(`${base}/top10`, { method:'POST', headers:{ 'Content-Type': 'application/json' }, body: JSON.stringify({ name, score: sc }) });
+  const sc = Math.max(0, Number(score||0));
+  const dur = Math.max(0, Number(durationMs||0));
+  await fetch(`${base}/top10`, { method:'POST', headers:{ 'Content-Type': 'application/json' }, body: JSON.stringify({ name, score: sc, durationMs: dur }) });
   }catch{}
 }
 
@@ -125,6 +126,11 @@ const nextCvs = document.getElementById('next');
 const nextCtx = nextCvs.getContext('2d');
 const next2Cvs = document.getElementById('next2');
 const next2Ctx = next2Cvs ? next2Cvs.getContext('2d') : null;
+// Miniatures overlay (mobile)
+const nextMini = document.getElementById('next-mini');
+const nextMiniCtx = nextMini ? nextMini.getContext('2d') : null;
+const oppMini = document.getElementById('opp-mini');
+const oppMiniCtx = oppMini ? oppMini.getContext('2d') : null;
 // Opponent canvas (2 joueurs)
 const oppCvs = document.getElementById('opp');
 const oppCtx = oppCvs ? oppCvs.getContext('2d') : null;
@@ -241,6 +247,12 @@ let hHoldStart = 0;
 let hLastMove = 0;
 const H_DAS = 120; // délai initial ms
 const H_ARR = 30;  // répétition ms
+// Répétition verticale (soft drop maintenu)
+let vHeld = false;
+let vLastMove = 0;
+const V_ARR = 35; // ms
+// Timestamp début de partie pour durée de jeu
+let gameStartAt = 0;
 // Effet visuel de rotation (arcs lumineux plus lents et centrés sur le centre de gravité)
 let rotFxStart = 0; const rotFxDur = 280; // ms
 // Compteur de départ piloté par le serveur
@@ -394,19 +406,24 @@ function step(ts){
   // accélération toutes les 30s
   if(ts - lastSpeedup >= SPEEDUP_EVERY_MS){
     level = Math.min(10, level+1);
-    // courbe d’accélération douce jusqu’à ~80ms
-    const factor = 0.9; // un peu moins agressif
-    speedMs = Math.max(80, Math.floor(speedMs*factor));
+    // Accélération plus sensible par palier: plus le niveau monte, plus le facteur se réduit.
+    // Exemple: L1≈0.88, L5≈0.80, plancher 0.78
+    const factor = Math.max(0.78, 0.9 - 0.02*level);
+    speedMs = Math.max(60, Math.floor(speedMs * factor));
     lastSpeedup = ts;
     updateHUD();
   }
 
   // auto-repeat horizontal
   handleHorizontal(ts);
+  // auto-repeat vertical (soft drop maintenu)
+  handleVertical(ts);
 
   draw();
   // adapter musique si la pile évolue
   ensureMusicMode();
+  // tenir la miniature adverse à jour en continu
+  try{ if(oppMiniCtx){ drawOppMini(); } }catch{}
   requestAnimationFrame(step);
 }
 
@@ -418,6 +435,14 @@ function handleHorizontal(ts){
       move(hDir);
       hLastMove = ts;
     }
+  }
+}
+
+function handleVertical(ts){
+  if(!vHeld) return;
+  if(ts - vLastMove >= V_ARR){
+    softDrop();
+    vLastMove = ts;
   }
 }
 
@@ -493,20 +518,23 @@ function draw(){
       ctx.textBaseline = 'middle';
       ctx.fillText('Éliminé', cvs.width/2, cvs.height - h/2);
     } else {
-      // En solo: overlay complet
+      // En solo: overlay complet avec texte plus petit
       ctx.fillStyle = 'rgba(0,0,0,0.6)';
       ctx.fillRect(0,0,cvs.width,cvs.height);
       ctx.fillStyle = '#ef4444';
-      ctx.font = 'bold 28px Orbitron, system-ui';
+      const fs = Math.max(20, Math.floor(cvs.width * 0.08));
+      ctx.font = `bold ${fs}px Orbitron, system-ui`;
       ctx.textAlign = 'center';
-      ctx.fillText('GAME OVER', cvs.width/2, cvs.height/2);
+      ctx.fillText('GAME OVER', cvs.width/2, Math.floor(cvs.height*0.46));
     }
     ctx.restore();
   }
   // Mettre à jour le HUD en continu
   updateHUD();
-    // Opponent board
-    if(oppCtx){ drawOpponent(); }
+  // Opponent board
+  if(oppCtx){ drawOpponent(); }
+  // Miniatures (mobile)
+  try{ if(oppMiniCtx){ drawOppMini(); } }catch{}
 }
 
 function drawCell(cx,cy,color,glow=false){
@@ -557,14 +585,15 @@ function drawNext(){
   const p1 = nextQueue[0]; const p2 = nextQueue[1];
   if(p1) drawMiniPiece(nextCtx, nextCvs, p1);
   if(p2 && next2Ctx) drawMiniPiece(next2Ctx, next2Cvs, p2);
+  // plus d'overlay next-mini (déplacé en sidebar native)
 }
 
-function drawMiniPiece(ctxMini, cvsMini, piece){
+function drawMiniPiece(ctxMini, cvsMini, piece, sizeOverride){
   const m = piece.mat; const key = piece.key; const color = COLORS[key];
   let minX=4,maxX=0,minY=4,maxY=0;
   for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(m[j][i]){ minX=Math.min(minX,i); maxX=Math.max(maxX,i); minY=Math.min(minY,j); maxY=Math.max(maxY,j); }
   const w=maxX-minX+1; const h=maxY-minY+1;
-  const size = 24;
+  const size = sizeOverride || 24;
   const offx = Math.floor((cvsMini.width - w*size)/2);
   const offy = Math.floor((cvsMini.height - h*size)/2);
   for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(m[j][i]){
@@ -618,7 +647,7 @@ function drawLandingLine(row){
   ctx.stroke();
   ctx.restore();
 }
-// Lignes verticales de projection (bords gauche/droit) du bas de la pièce jusqu'au bas du plateau
+// Lignes verticales de projection (bords gauche/droite) du bas de la pièce jusqu'au bas du plateau
 function drawLandingVerticals(px, py, mat){
   const b = getPieceBounds(mat);
   const yPix = ROWS * TILE; // descendre jusqu’au bas du plateau
@@ -759,7 +788,8 @@ function renderTop10(){
     elTop10.innerHTML = '';
     list.slice(0,10).forEach((e,i)=>{
       const li = document.createElement('li');
-      li.textContent = `${i+1}. ${e.name} — ${e.score}`;
+  const dur = formatDur(e.durationMs);
+  li.textContent = `${i+1}. ${e.name} — ${e.score}${dur?` (${dur})`:''}`;
       elTop10.appendChild(li);
     });
   });
@@ -775,7 +805,10 @@ function gameOver(){
   draw();
   // En multijoueur, pas de modale; en solo on affiche la modale
   // En solo: ne plus afficher la modale Game Over; le bouton "Nouvelle partie" suffit
-  if(playerName) apiTop10Push(playerName, score);
+  try{
+    const dur = Math.max(0, Math.floor((performance.now() - (gameStartAt||performance.now()))));
+    if(playerName) apiTop10Push(playerName, score, dur);
+  }catch{ if(playerName) apiTop10Push(playerName, score); }
   fx.gameOverJingle();
   // notifier le serveur
   mpSend({type:'gameover'});
@@ -807,12 +840,16 @@ function start(){
   if(!roomId){ rng = Math.random; }
   score = 0; level = 1; speedMs = START_SPEED_MS; lastSpeedup = 0; step.last = 0;
   selfDead = false; opponentDead = false; opponentActive = null;
+  gameStartAt = performance.now();
   resetGrid(); nextQueue = []; bag = []; spawn(); updateHUD(); renderTop10();
   // Nettoyer effets/overlays résiduels
   try{ fxCtx.clearRect(0,0,fxCvs.width,fxCvs.height); fxCvs.style.transform=''; }catch{}
   cancelServerCountdown();
   running=true; paused=false; fx.resume();
+  // Démarrer la musique en mode « chill » immédiatement
   fx.startMusic('chill');
+  // Et forcer l'intensité vers 0 dès que possible (crossfade MP3)
+  try{ fx.setMusicIntensity?.(0); }catch{}
   requestAnimationFrame(step);
 }
 
@@ -840,7 +877,14 @@ function resetIdleView(){
 
 // Inputs
 window.addEventListener('keydown', (e)=>{
-  if(!running || paused){ return; }
+  // Bloquer toute entrée si non-running, en pause, ou (en multi) avant le départ
+  if(!running || paused || (roomId && !mpStarted) || serverCountdownActive){ return; }
+  // Empêcher le scroll en jeu
+  try{
+    if(screenGame && screenGame.classList && screenGame.classList.contains('active')){
+      if(['ArrowDown','ArrowUp','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
+    }
+  }catch{}
   switch(e.code){
     case 'ArrowLeft': {
       move(-1);
@@ -854,7 +898,7 @@ window.addEventListener('keydown', (e)=>{
     case 'ArrowDown': {
       const now = performance.now();
       if(!e.repeat && (now - lastArrowDownTs) < 200){ hardDrop(); lastArrowDownTs = 0; break; }
-      lastArrowDownTs = now; softDrop(); break;
+      lastArrowDownTs = now; vHeld = true; vLastMove = now; softDrop(); break;
     }
     case 'Space': hardDrop(); break;
     case 'KeyP': togglePause(); break;
@@ -864,6 +908,7 @@ window.addEventListener('keydown', (e)=>{
 window.addEventListener('keyup', (e)=>{
   if(e.code === 'ArrowLeft' && hDir === -1){ hDir = 0; }
   if(e.code === 'ArrowRight' && hDir === 1){ hDir = 0; }
+  if(e.code === 'ArrowDown'){ vHeld = false; }
 });
 
 function togglePause(){
@@ -894,8 +939,14 @@ function togglePause(){
 
   function canControl(){
     // Autoriser si l’écran jeu est actif et qu’on n’est pas en pause
-    if(paused) return false;
-    if(!active) return false;
+  if(paused) return false;
+  if(!active) return false;
+  // Ne rien autoriser si la boucle n'est pas en cours
+  if(!running) return false;
+  // En multi: n’autoriser que quand la manche a démarré
+  if(roomId && !mpStarted) return false;
+  // Pendant le compte à rebours piloté serveur: bloquer
+  if(serverCountdownActive) return false;
     const isGame = !!(screenGame && screenGame.classList && screenGame.classList.contains('active'));
     return isGame;
   }
@@ -995,8 +1046,11 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
 // Init
 (async function init(){
   if(playerName) elPlayerName.textContent = playerName; else await askName();
+  // Taille gérée par fitBoardToContainer selon breakpoint
   resetGrid();
   spawn();
+  // Fit-to-container après un tick pour que le layout soit appliqué
+  try{ setTimeout(()=>{ placeMPPanel(); fitBoardToContainer(); draw(); }, 0); }catch{}
   draw();
   renderTop10();
   // Toggle Mode Easy
@@ -1066,9 +1120,10 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
         const date = e.ts ? new Date(e.ts) : null;
         const dateTxt = date ? date.toLocaleDateString() : '';
         const scoreTxt = Number(e.score||0).toLocaleString('fr-FR');
+  const durTxt = formatDur(e.durationMs);
         li.className = i<3 ? 'prime' : '';
-        // nom … score (avec liseré points), date en dessous
-        li.innerHTML = `<div class="line"><span class="nm">${escapeHtml(e.name||'Joueur')}</span><span class="dots"></span><span class="sc">${scoreTxt}</span></div>${dateTxt?`<div class="sub">${dateTxt}</div>`:''}`;
+  // nom … score (avec liseré points), durée et date en dessous
+  li.innerHTML = `<div class="line"><span class="nm">${escapeHtml(e.name||'Joueur')}</span><span class="dots"></span><span class="sc">${scoreTxt}${durTxt?` • ${durTxt}`:''}</span></div>${dateTxt?`<div class="sub">${dateTxt}</div>`:''}`;
         topHeroList.appendChild(li);
       });
       dlgTopHero.showModal();
@@ -1139,6 +1194,20 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
     window.addEventListener('scroll', ()=>{ if(screenGame && screenGame.classList.contains('active')) positionToastForGame(); }, { passive:true });
   }catch{}
 
+  // Refit sur changement de breakpoint mobile/desktop
+  try{
+    const mq = window.matchMedia('(max-width: 900px)');
+  const handler = ()=>{ placeMPPanel(); fitBoardToContainer(); draw(); balanceUnderPanelsHeight(); };
+    mq.addEventListener ? mq.addEventListener('change', handler) : mq.addListener(handler);
+    // Affiner en mobile: écouter visualViewport et l'orientation si disponibles
+    if(window.visualViewport){
+  const vvHandler = ()=>{ if(screenGame && screenGame.classList.contains('active')){ fitBoardToContainer(); draw(); positionToastForGame(); balanceUnderPanelsHeight(); } };
+      window.visualViewport.addEventListener('resize', vvHandler);
+      window.visualViewport.addEventListener('scroll', vvHandler);
+    }
+  window.addEventListener('orientationchange', ()=>{ setTimeout(()=>{ fitBoardToContainer(); draw(); positionToastForGame(); balanceUnderPanelsHeight(); }, 50); });
+  }catch{}
+
 })();
 
 
@@ -1166,15 +1235,18 @@ function ensureMusicMode(){
   const lvlNorm = (lvl - 1) / 9; // 0..1
   // Normaliser la pile: 0 quand vide, 1 quand proche du haut (dans ~3 lignes du plafond)
   const stackNorm = Math.min(1, Math.max(0, stackH / Math.max(1, ROWS - 3)));
-  // Composer (max = montée rapide avec danger ou progression via niveau)
-  const intensity = Math.max(lvlNorm, stackNorm * 0.95);
+  // Composer (max = montée rapide avec danger ou progression via niveau). Un peu plus sensible à la pile.
+  const intensity = Math.max(lvlNorm * 0.9, stackNorm * 1.05);
   if(typeof fx.setMusicIntensity === 'function'){
     fx.setMusicIntensity(intensity);
   } else {
     fx.startMusic(intensity > 0.6 ? 'stress' : 'chill');
   }
   const frames = document.querySelectorAll('.boards .board-wrap .frame');
-  const stressBlink = intensity > 0.66;
+  // Blink uniquement en vrai mode « stress »: quand la pile entre dans la zone de risque (<=3 lignes du haut)
+  // et que l'intensité dépasse le seuil.
+  const inRiskZone = stackH >= (ROWS - 4); // déclenche un peu plus tôt
+  const stressBlink = inRiskZone && (intensity > 0.6);
   if(frames && frames[0]){ frames[0].classList.toggle('stress-blink', stressBlink); }
 }
 
@@ -1267,6 +1339,7 @@ function connectWS(){
           if(msg.active){ opponentActive = msg.active; }
           // Redessiner immédiatement le plateau adverse pour qu’un joueur éliminé voie l’action en direct
           if(oppCtx){ drawOpponent(); }
+          try{ if(oppMiniCtx){ drawOppMini(); } }catch{}
           // ne pas toucher à opponentDead ici pour conserver l'affichage "Éliminé" jusqu'au prochain start
           break;
         case 'scores': {
@@ -1311,6 +1384,7 @@ function connectWS(){
           opponentDead = true;
           // force un redraw immédiat pour afficher le bandeau Éliminé côté adverse
           draw(); if(oppCtx) drawOpponent();
+          try{ if(oppMiniCtx){ drawOppMini(); } }catch{}
           renderPlayersList();
           break;
         case 'ready': {
@@ -1451,6 +1525,7 @@ function renderRoomsJoin(rooms){
   // Ne modifier le titre que si l'onglet Salons est actif
   if(joinTitle && tabRooms && tabRooms.classList.contains('active')) joinTitle.textContent = 'Salons';
   // Stats globales (côté serveur uniquement)
+ 
   const total = Number(rooms.length||0);
   // joueurs connectés = tous les joueurs actifs côté serveur, pas seulement dans les salons
   const players = Array.isArray(joinPlayersCache) ? joinPlayersCache.length : 0;
@@ -1581,15 +1656,59 @@ function drawOppCell(cx,cy,color){
   oppCtx.stroke();
 }
 
+function drawOppMini(){
+  if(!oppMiniCtx || !oppMini) return;
+  const W = oppMini.clientWidth || oppMini.width, H = oppMini.clientHeight || oppMini.height;
+  if(oppMini.width !== W) oppMini.width = W;
+  if(oppMini.height !== H) oppMini.height = H;
+  oppMiniCtx.clearRect(0,0,W,H);
+  oppMiniCtx.fillStyle = '#0e1116'; oppMiniCtx.fillRect(0,0,W,H);
+  oppMiniCtx.strokeStyle = '#1f242c'; oppMiniCtx.lineWidth = 1;
+  const s = Math.min(Math.floor(W/COLS), Math.floor(H/ROWS));
+  for(let i=1;i<COLS;i++){ oppMiniCtx.beginPath(); oppMiniCtx.moveTo(i*s,0); oppMiniCtx.lineTo(i*s,ROWS*s); oppMiniCtx.stroke(); }
+  for(let j=1;j<ROWS;j++){ oppMiniCtx.beginPath(); oppMiniCtx.moveTo(0,j*s); oppMiniCtx.lineTo(COLS*s,j*s); oppMiniCtx.stroke(); }
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){
+    const k = opponentGrid[r][c]; if(!k) continue;
+    const px=c*s, py=r*s;
+    const grad = oppMiniCtx.createLinearGradient(px,py,px,py+s);
+    grad.addColorStop(0, shade(COLORS[k], 6));
+    grad.addColorStop(1, shade(COLORS[k], -8));
+    oppMiniCtx.fillStyle = grad;
+    roundRect(oppMiniCtx, px+1, py+1, s-2, s-2, 3); oppMiniCtx.fill();
+  }
+  // pièce active adverse (pour voir “défiler” dans la miniature)
+  if(opponentActive && opponentActive.mat){
+    oppMiniCtx.save();
+    oppMiniCtx.globalAlpha = 0.8;
+    const color = COLORS[opponentActive.key] || '#9AA0A8';
+    for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(opponentActive.mat[j][i]){
+      const cx = opponentActive.x + i;
+      const cy = opponentActive.y + j;
+      if(cx<0||cx>=COLS||cy<0||cy>=ROWS) continue;
+      const px=cx*s, py=cy*s;
+      const grad = oppMiniCtx.createLinearGradient(px,py,px,py+s);
+      grad.addColorStop(0, shade(color, 6));
+      grad.addColorStop(1, shade(color, -8));
+      oppMiniCtx.fillStyle = grad;
+      roundRect(oppMiniCtx, px+1, py+1, s-2, s-2, 3); oppMiniCtx.fill();
+    }
+    oppMiniCtx.restore();
+  }
+}
+
 // Broadcast state periodically
 setInterval(()=>{
   if(!roomId) return;
+  // Émettre seulement si une manche est en cours
+  if(!mpStarted || !running) return;
   updateScoreLabels();
   mpSend({type:'state', grid, score, active: active? { key: active.key, mat: active.mat, x, y } : null});
 }, 250);
 
 function broadcastState(){
   if(!roomId) return;
+  // N’envoyer que pendant la partie
+  if(!mpStarted || !running) return;
   mpSend({type:'state', grid, score, active: active? { key: active.key, mat: active.mat, x, y } : null});
 }
 
@@ -1723,17 +1842,130 @@ function mulberry32(a){
 function rngInt(n){ return Math.floor(rng()*n); }
 
 // UI helpers
+function fitBoardToContainer(){
+  if(!cvs || !cvs.parentElement) return;
+  const isMobile = !!(window.matchMedia && window.matchMedia('(max-width: 900px)').matches);
+  if(!isMobile){
+    // Desktop: en solo, agrandir le plateau selon l'espace; en multi, rester sur 300x600
+    const app = document.getElementById('app');
+    const isSolo = !!(app && app.classList.contains('solo-mode'));
+    // Mesures d'espace dispo
+    const gap = 16; // gap de la grille desktop
+    let topH=0, botH=0;
+    try{
+      const topbar = document.querySelector('.topbar');
+      const bottombar = document.querySelector('.bottombar');
+      topH = topbar ? topbar.getBoundingClientRect().height : 0;
+      botH = bottombar ? bottombar.getBoundingClientRect().height : 0;
+    }catch{}
+    const appEl = document.getElementById('app');
+    const appPadX = 32; // padding latéral ~16px * 2
+    const appW = (appEl ? appEl.clientWidth : window.innerWidth) - appPadX;
+    const viewH = window.innerHeight - topH - botH - 48; // marge de respiration
+    // Sidebar desktop fixe 300px
+    const sidebarW = 300;
+    if(isSolo){
+      // Largeur disponible pour le plateau (colonne gauche)
+      const maxWFromWidth = Math.max(280, Math.floor(appW - sidebarW - gap));
+      const maxWFromHeight = Math.max(280, Math.floor(viewH / 2));
+      let targetW = Math.min(maxWFromWidth, maxWFromHeight);
+  // bornes raisonnables (élargies pour réduire l'espace vide en solo desktop)
+  targetW = Math.max(300, Math.min(820, targetW));
+  TILE = Math.max(16, Math.min(56, Math.floor(targetW / COLS)));
+      const pxW = TILE * COLS;
+      const pxH = TILE * ROWS;
+      if(cvs.width !== pxW) cvs.width = pxW;
+      if(cvs.height !== pxH) cvs.height = pxH;
+      if(fxCvs.width !== pxW) fxCvs.width = pxW;
+      if(fxCvs.height !== pxH) fxCvs.height = pxH;
+      cvs.style.width = pxW + 'px';
+      cvs.style.height = pxH + 'px';
+      fxCvs.style.width = pxW + 'px';
+      fxCvs.style.height = pxH + 'px';
+      // Mettre à jour la variable CSS --board-w (canvas + padding/bordure ≈ 22px)
+      try{ document.documentElement.style.setProperty('--board-w', (pxW + 22) + 'px'); }catch{}
+      return;
+    } else {
+      // Multi: taille fixe
+      TILE = 30;
+      if(cvs.width !== COLS*TILE) cvs.width = COLS*TILE;
+      if(cvs.height !== ROWS*TILE) cvs.height = ROWS*TILE;
+      if(fxCvs.width !== COLS*TILE) fxCvs.width = COLS*TILE;
+      if(fxCvs.height !== ROWS*TILE) fxCvs.height = ROWS*TILE;
+      cvs.style.width = cvs.width + 'px';
+      cvs.style.height = cvs.height + 'px';
+      fxCvs.style.width = fxCvs.width + 'px';
+      fxCvs.style.height = fxCvs.height + 'px';
+      // Remettre --board-w sur la valeur par défaut (322px) si besoin
+      try{ document.documentElement.style.setProperty('--board-w', '322px'); }catch{}
+      return;
+    }
+  }
+  // Fit to container (mobile):
+  // 1) Largeur réelle du conteneur boards (en mobile: pleine largeur)
+  let availW = (()=>{
+    try{
+      const boards = document.querySelector('#app .boards');
+      if(boards && boards.clientWidth) return boards.clientWidth;
+      const layout = document.querySelector('#app .layout');
+      if(layout && layout.clientWidth) return layout.clientWidth;
+      return window.innerWidth - 24;
+    }catch{ return Math.max(120, window.innerWidth - 24); }
+  })();
+  // 2) Hauteur visible (précise) = visualViewport.height - topbar - bottombar - petite marge
+  let vh = (window.visualViewport && window.visualViewport.height) ? window.visualViewport.height : window.innerHeight;
+  try{
+    const topbar = document.querySelector('.topbar');
+    const bottombar = document.querySelector('.bottombar');
+    const topH = topbar ? topbar.getBoundingClientRect().height : 0;
+    const botH = bottombar ? bottombar.getBoundingClientRect().height : 0;
+    // marge plus serrée pour maximiser la hauteur du plateau
+    vh = Math.max(240, vh - topH - botH - 4);
+  }catch{}
+  // 3) Le canvas est dans .frame (padding 10, bordure ≈ 2) -> extra ≈ 22 px en largeur, 20px en hauteur
+  const frameExtraW = 22, frameExtraH = 20;
+  const maxCanvasWByWidth = Math.max(100, Math.floor(availW - frameExtraW));
+  const maxCanvasWByHeight = Math.max(100, Math.floor((vh - frameExtraH) / 2)); // ratio 1:2
+  const targetCanvasW = Math.max(120, Math.min(maxCanvasWByWidth, maxCanvasWByHeight));
+  // 4) Recalcul TILE (entier) à partir de la largeur visée du canvas
+  TILE = Math.max(12, Math.floor(targetCanvasW / COLS));
+  const pxW = TILE * COLS; // taille intrinsèque du canvas
+  const pxH = TILE * ROWS;
+  // appliquer taille intrinsèque (backing store) pour éviter le flou
+  if(cvs.width !== pxW) cvs.width = pxW;
+  if(cvs.height !== pxH) cvs.height = pxH;
+  if(fxCvs.width !== pxW) fxCvs.width = pxW;
+  if(fxCvs.height !== pxH) fxCvs.height = pxH;
+  // appliquer tailles CSS pour l’affichage (peuvent différer légèrement)
+  cvs.style.width = pxW + 'px';
+  cvs.style.height = pxH + 'px';
+  fxCvs.style.width = pxW + 'px';
+  fxCvs.style.height = pxH + 'px';
+  try{ document.documentElement.style.setProperty('--board-w', (pxW + 22) + 'px'); }catch{}
+}
+
 function updateOpponentVisibility(){
   if(!oppCvs) return;
   const wrap = oppCvs.closest('.board-wrap');
-  if(wrap){ wrap.style.display = roomId ? 'flex' : 'none'; }
+  // Ne pas forcer l'affichage en mobile; laisser le CSS masquer #board-opp
+  if(wrap){
+    if(window.matchMedia && window.matchMedia('(max-width: 900px)').matches){
+      wrap.style.display = ''; // laisser CSS décider
+    } else {
+      wrap.style.display = roomId ? 'flex' : 'none';
+    }
+  }
   if(waitBanner){ waitBanner.classList.toggle('hidden', !roomId || !!peerConnected); }
-  // Centrage en mode solo
   try{
     const app = document.getElementById('app');
     if(app){ app.classList.toggle('solo-mode', !roomId); }
   }catch{}
   if(panelMP){ panelMP.classList.toggle('hidden', !roomId); }
+  // Positionner le panneau MP selon le breakpoint (mobile: plein largeur sous les plateaux)
+  try{ placeMPPanel(); }catch{}
+  // Recalibrer la taille du plateau au basculement solo/multi
+  try{ fitBoardToContainer(); draw(); balanceUnderPanelsHeight(); }catch{}
+  // miniature en sidebar: visible seulement en multi (gérée par CSS via .solo-mode)
 }
 
 // ---------- UI helpers ----------
@@ -1787,6 +2019,7 @@ function showGame(){
   try{ dlgResult && dlgResult.close(); }catch{}
   // Si aucune manche ne tourne, basculer sur un état propre
   if(!running && !mpStarted){ resetIdleView(); }
+  try{ placeMPPanel(); fitBoardToContainer(); balanceUnderPanelsHeight(); }catch{}
   draw(); updateOpponentVisibility(); updateStartButtonLabel(); renderPlayersList();
   positionToastForGame();
 }
@@ -1862,6 +2095,94 @@ function resetToastPosition(){
   toastEl.classList.remove('at-center');
   toastEl.style.removeProperty('--toast-left');
   toastEl.style.removeProperty('--toast-top');
+}
+
+function formatDur(ms){
+  const t = Number(ms||0); if(!t || !Number.isFinite(t)) return '';
+  const s = Math.floor(t/1000);
+  const m = Math.floor(s/60);
+  const r = s%60;
+  return `${m}:${String(r).padStart(2,'0')}`;
+}
+
+// --------- Placement adaptatif du panneau Multijoueur ---------
+function placeMPPanel(){
+  if(!panelMP) return;
+  const layout = document.querySelector('#app .layout');
+  const sidebar = document.querySelector('#app .sidebar');
+  const under = document.getElementById('under-panels');
+  if(!layout || !sidebar) return;
+  const isMobile = !!(window.matchMedia && window.matchMedia('(max-width: 900px)').matches);
+  const appEl = document.getElementById('app');
+  const isSolo = !!(appEl && appEl.classList.contains('solo-mode'));
+  if(isMobile){
+    // Sidebar à droite: on garde Next et Aperçu adversaire dans la sidebar
+    try{
+      const panelNext = document.querySelector('#app .panel.next');
+      const oppPrev = document.querySelector('#app .panel.opp-preview');
+      if(panelNext && panelNext.parentElement !== sidebar) sidebar.appendChild(panelNext);
+      if(oppPrev && oppPrev.parentElement !== sidebar) sidebar.appendChild(oppPrev);
+    }catch{}
+    const status = document.querySelector('#app .panel.status');
+  if(isSolo){
+      // SOLO: laisser le statut dans la sidebar, au-dessus de Next
+      if(status && status.parentElement !== sidebar){
+        // insérer avant le premier panel de la sidebar (Next s’il existe)
+        const firstPanel = sidebar.querySelector('.panel');
+        if(firstPanel){ sidebar.insertBefore(status, firstPanel); }
+        else { sidebar.appendChild(status); }
+      }
+      // MP (masqué en solo) peut rester où il est; pas de zone under nécessaire
+  } else {
+      // MULTI: Statut + Multijoueur sous le plateau, même rangée
+      if(under){
+        if(status){
+          status.style.removeProperty('grid-area');
+          status.style.removeProperty('gridColumn');
+          status.style.removeProperty('gridRow');
+          if(status.parentElement !== under) under.appendChild(status);
+        }
+        panelMP.style.removeProperty('grid-area');
+        panelMP.style.removeProperty('gridColumn');
+        panelMP.style.removeProperty('gridRow');
+        if(panelMP.parentElement !== under) under.appendChild(panelMP);
+      }
+    }
+    panelMP.style.removeProperty('grid-area');
+    panelMP.style.removeProperty('gridColumn');
+    panelMP.style.removeProperty('gridRow');
+  } else {
+    // Revenir en desktop: tous les panneaux dans la sidebar comme avant
+    try{
+      const status = document.querySelector('#app .panel.status');
+      const next = document.querySelector('#app .panel.next');
+      const oppPrev = document.querySelector('#app .panel.opp-preview');
+      if(status && status.parentElement !== sidebar) sidebar.appendChild(status);
+      if(next && next.parentElement !== sidebar) sidebar.appendChild(next);
+      if(oppPrev && oppPrev.parentElement !== sidebar) sidebar.appendChild(oppPrev);
+    }catch{}
+    if(panelMP.parentElement !== sidebar){ sidebar.appendChild(panelMP); }
+    panelMP.style.removeProperty('grid-area');
+  }
+}
+
+// Uniformiser la hauteur des panneaux sous le plateau (mobile + multi)
+function balanceUnderPanelsHeight(){
+  try{
+    const isMobile = !!(window.matchMedia && window.matchMedia('(max-width: 900px)').matches);
+    const appEl = document.getElementById('app');
+    const isSolo = !!(appEl && appEl.classList.contains('solo-mode'));
+    if(!isMobile || isSolo) return;
+    const under = document.getElementById('under-panels');
+    if(!under) return;
+    const cards = under.querySelectorAll('.panel');
+    if(cards.length<2) return;
+    // reset
+    cards.forEach(c=> c.style.removeProperty('minHeight'));
+    // aligner sur la plus grande
+    let h = 0; cards.forEach(c=>{ h = Math.max(h, c.getBoundingClientRect().height); });
+    cards.forEach(c=> c.style.minHeight = Math.ceil(h)+ 'px');
+  }catch{}
 }
 
 // ======== Animation Héro (canvas) ========
@@ -2033,6 +2354,7 @@ function computeHint(){
   if(!easyMode || !active){ hint = null; return; }
   const pieceKey = active.key;
   let best = null;
+  let bestNonClear = null; // meilleure position qui ne clear pas (0 lignes)
   for(let rot=0; rot<4; rot++){
     const mat = rotateN(TETROMINOS[pieceKey], rot);
     // largeur utile
@@ -2052,7 +2374,21 @@ function computeHint(){
       const holes = countHoles(sim);
       const bump = bumpiness(sim);
   const score = clearedBonus - holes*6 - bump*0.5 - h1*0.2 + la*0.6;
-      if(!best || score>best.score){ best = { x:px, rot, yLanding:py, score }; }
+      const candidate = { x:px, rot, yLanding:py, score, cleared };
+      if(!best || score > best.score){ best = candidate; }
+      if(cleared === 0){ if(!bestNonClear || score > bestNonClear.score){ bestNonClear = candidate; } }
+    }
+  }
+  // Politique Easy: éviter de suggérer une pose qui détruit 1 à 2 lignes, à moins qu'il n'existe aucune bonne alternative.
+  // On autorise si cleared >=3 (attaque) ou si aucune option cleared===0 n'existe avec un score proche.
+  if(best && (best.cleared===1 || best.cleared===2)){
+    if(bestNonClear){
+      // Si la meilleure non-clear est raisonnablement proche, on la préfère.
+      const margin = 15; // tolérance de score
+      if(best.score - bestNonClear.score <= margin){
+        hint = bestNonClear;
+        return;
+      }
     }
   }
   hint = best;

@@ -88,7 +88,7 @@ export class AudioFX {
       try {
         // Chemin relatif depuis src/audio.js vers assets/music/chill
         // Utilise Vite import.meta.glob pour récupérer des URLs directes
-        const glob = import.meta && import.meta.glob ? import.meta.glob('../assets/music/chill/**/*.{mp3,ogg,wav}', { eager: true, as: 'url' }) : null;
+  const glob = import.meta && import.meta.glob ? import.meta.glob('../assets/music/chill/**/*.{mp3,ogg,wav}', { eager: true, query: '?url', import: 'default' }) : null;
         if (glob) chillList = Object.values(glob).filter(Boolean);
       } catch {}
     }
@@ -162,7 +162,7 @@ export class AudioFX {
   _ensureStartList(){
     if(this._startList && this._startList.length) return this._startList;
     try{
-      const glob = import.meta && import.meta.glob ? import.meta.glob('../assets/music/start/**/*.{mp3,ogg,wav}', { eager: true, as: 'url' }) : null;
+  const glob = import.meta && import.meta.glob ? import.meta.glob('../assets/music/start/**/*.{mp3,ogg,wav}', { eager: true, query: '?url', import: 'default' }) : null;
       if(glob) this._startList = Object.values(glob).filter(Boolean);
     }catch{}
     if(!this._startList || !this._startList.length){

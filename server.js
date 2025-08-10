@@ -84,8 +84,8 @@ try{
 function saveLeaderboard(){ try{ fs.writeFileSync(leaderboardPath, JSON.stringify(leaderboard.slice(0,100)), 'utf-8'); }catch{} }
 function getTop10(){
   return leaderboard
-    .filter(e=> e && typeof e.score==='number' && e.name)
-    .sort((a,b)=> (b.score||0)-(a.score||0))
+  .filter(e=> e && typeof e.score==='number' && e.name)
+  .sort((a,b)=> (b.score||0)-(a.score||0))
     .slice(0,10);
 }
 app.get('/top10', (req,res)=>{
@@ -98,13 +98,14 @@ app.post('/top10', (req,res)=>{
   res.setHeader('Access-Control-Allow-Origin', '*');
   const name = (req.body && (req.body.name||'')+'').slice(0,32) || 'Player';
   const score = Number(req.body && req.body.score) || 0;
+  const durationMs = Math.max(0, Number(req.body && req.body.durationMs || 0));
   if(Number.isFinite(score) && score>=0){
     // entrée conditionnelle: uniquement si score dans le Top10
     const doInsert = ()=>{
       const currentTop = getTop10();
       const threshold = currentTop.length<10 ? 0 : (currentTop[9]?.score||0);
       if(score > threshold){
-        leaderboard.push({ name, score, ts: Date.now() });
+        leaderboard.push({ name, score, ts: Date.now(), durationMs });
         leaderboard = leaderboard.sort((a,b)=> (b.score||0)-(a.score||0)).slice(0,1000);
         saveLeaderboard();
         logTop10('POST /top10 (accepted)');
@@ -410,13 +411,13 @@ wss.on('connection', (ws)=>{
         for(const c of r.clients){ send(c, { type:'matchover', scores }); }
     try{ console.log(`[MATCH] Terminée: room=${r.id} scores=${scores.map(s=>`${s.name||s.id}:${s.score}`).join(', ')}`); }catch{}
         // persist to server-side leaderboard
-        try{
-          const pushIfTop = (nm, sc)=>{
+  try{
+      const pushIfTop = (nm, sc)=>{
             const doInsert = ()=>{
               const currentTop = getTop10();
               const threshold = currentTop.length<10 ? 0 : (currentTop[9]?.score||0);
               if(sc > threshold){
-                leaderboard.push({ name: nm, score: sc, ts: Date.now() });
+        leaderboard.push({ name: nm, score: sc, ts: Date.now(), durationMs: 0 });
                 leaderboard = leaderboard.sort((a,b)=> (b.score||0)-(a.score||0)).slice(0,1000);
                 saveLeaderboard();
               }

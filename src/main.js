@@ -86,6 +86,7 @@ function onServerCountdown(seconds){
   if(countdownOverlay){ countdownOverlay.classList.add('hidden'); }
   if(btnCancelCountdown){ btnCancelCountdown.onclick = ()=>{ if(myReady){ toggleReady(); } }; }
   requestAnimationFrame(drawServerCountdown);
+  try{ updateInputLock(); }catch{}
 }
 
 function cancelServerCountdown(){
@@ -96,6 +97,7 @@ function cancelServerCountdown(){
   // Stopper l'intro de départ si elle joue encore
   try{ fx.stopStartCue?.(); }catch{}
   draw(); if(peerConnected && oppCtx) drawOpponent();
+  try{ updateInputLock(); }catch{}
 }
 
 function drawServerCountdown(){
@@ -117,7 +119,7 @@ function drawServerCountdown(){
   if(peerConnected && oppCtx){ drawNum(oppCtx, oppCvs); }
   // Pas de mise à jour de texte DOM pour éviter un deuxième compteur
   if(left>0 && serverCountdownActive){ requestAnimationFrame(drawServerCountdown); }
-  else { serverCountdownActive=false; if(countdownOverlay){ countdownOverlay.classList.add('hidden'); } }
+  else { serverCountdownActive=false; if(countdownOverlay){ countdownOverlay.classList.add('hidden'); } try{ updateInputLock(); }catch{} }
 }
 const ctx = cvs.getContext('2d');
 const fxCvs = document.getElementById('fx');
@@ -851,6 +853,7 @@ function start(){
   // Et forcer l'intensité vers 0 dès que possible (crossfade MP3)
   try{ fx.setMusicIntensity?.(0); }catch{}
   requestAnimationFrame(step);
+  try{ updateInputLock(); }catch{}
 }
 
 // Remet l'UI/plateaux à un état « neutre » hors partie
@@ -873,12 +876,13 @@ function resetIdleView(){
   try{ fxCtx.clearRect(0,0,fxCvs.width,fxCvs.height); fxCvs.style.transform=''; }catch{}
   // redraw
   draw(); if(oppCtx && roomId) drawOpponent();
+  try{ updateInputLock(); }catch{}
 }
 
 // Inputs
 window.addEventListener('keydown', (e)=>{
-  // Bloquer toute entrée si non-running, en pause, ou (en multi) avant le départ
-  if(!running || paused || (roomId && !mpStarted) || serverCountdownActive){ return; }
+  // Bloquer toute entrée si non-running, en pause, ou (en multi) avant le départ / sans adversaire
+  if(!running || paused || (roomId && (!mpStarted || !peerConnected)) || serverCountdownActive){ return; }
   // Empêcher le scroll en jeu
   try{
     if(screenGame && screenGame.classList && screenGame.classList.contains('active')){
@@ -915,6 +919,7 @@ function togglePause(){
   paused = !paused;
   if(paused) fx.stopMusic();
   else { ensureMusicMode(); requestAnimationFrame(step); }
+  try{ updateInputLock(); }catch{}
 }
 
 // ======== Contrôles souris/pointeur (gestes type mobile) ========
@@ -944,7 +949,7 @@ function togglePause(){
   // Ne rien autoriser si la boucle n'est pas en cours
   if(!running) return false;
   // En multi: n’autoriser que quand la manche a démarré
-  if(roomId && !mpStarted) return false;
+  if(roomId && (!mpStarted || !peerConnected)) return false;
   // Pendant le compte à rebours piloté serveur: bloquer
   if(serverCountdownActive) return false;
     const isGame = !!(screenGame && screenGame.classList && screenGame.classList.contains('active'));
@@ -998,7 +1003,29 @@ function togglePause(){
   cvs.addEventListener('pointermove', onMove, { passive:false });
   cvs.addEventListener('pointerup', onUp, { passive:false });
   cvs.addEventListener('pointercancel', onUp, { passive:false });
+  try{ updateInputLock(); }catch{}
 })();
+
+// Indicateur visuel d'entrée verrouillée (curseur, aria)
+function isInputLocked(){
+  try{
+    const inGame = !!(screenGame && screenGame.classList && screenGame.classList.contains('active'));
+    if(!inGame) return true;
+    if(paused) return true;
+    if(!running) return true;
+    if(serverCountdownActive) return true;
+    if(roomId && (!mpStarted || !peerConnected)) return true;
+    return false;
+  }catch{ return false; }
+}
+function updateInputLock(){
+  try{
+    if(!cvs) return;
+    const locked = isInputLocked();
+    cvs.classList.toggle('input-locked', locked);
+    if(locked) cvs.setAttribute('aria-disabled','true'); else cvs.removeAttribute('aria-disabled');
+  }catch{}
+}
 
 // Boutons UI
 document.getElementById('btn-new').addEventListener('click', async ()=>{
@@ -1207,6 +1234,7 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
     }
   window.addEventListener('orientationchange', ()=>{ setTimeout(()=>{ fitBoardToContainer(); draw(); positionToastForGame(); balanceUnderPanelsHeight(); }, 50); });
   }catch{}
+  try{ updateInputLock(); }catch{}
 
 })();
 
@@ -1326,6 +1354,7 @@ function connectWS(){
           // nom de l’adversaire si on n’est pas l’hôte
           if(!isOwner && roomMeta.ownerName){ const el= document.getElementById('opp-label'); if(el) el.textContent = roomMeta.ownerName; }
           updateOwnerUI(); updateStartButtonLabel(); showGame(); showWaiting(!peerConnected); updateOpponentVisibility(); renderPlayersList();
+          try{ updateInputLock(); }catch{}
           // Si je suis hôte et prêt par défaut, envoyer l'état au serveur
           if(isOwner){ try{ ws && ws.readyState===1 && ws.send(JSON.stringify({type:'ready', ready:true})); }catch{} }
           // envoyer notre nom au serveur pour que l'autre voie notre pseudo
@@ -1356,6 +1385,7 @@ function connectWS(){
           if(peerConnected){
             try{ fx.playJoinerSfx(); }catch{}
             showWaiting(false);
+            try{ updateInputLock(); }catch{}
             // Annonce d'arrivée quand un joueur rejoint une partie ouverte
             if(!was){
               const nm = (msg && msg.name) || 'Un joueur';
@@ -1373,6 +1403,7 @@ function connectWS(){
             resetGrid(); opponentGrid = Array.from({length:ROWS},()=>Array(COLS).fill(null));
             nextQueue = []; bag = [];
             draw(); if(oppCtx) drawOpponent();
+            try{ updateInputLock(); }catch{}
             if(was){
               const leaverName = (msg && (msg.name || null)) || (document.getElementById('opp-label')?.textContent) || 'Le joueur';
               showToast(`${leaverName} a quitté la partie`);
@@ -1735,6 +1766,7 @@ function onMatchStart(seedStr){
   // conserver l’état "Prêt" affiché durant la manche
   updateReadyBadges();
   updateStartButtonLabel();
+  try{ updateInputLock(); }catch{}
 }
 
 function onMatchOver(scores){
@@ -1759,6 +1791,7 @@ function onMatchOver(scores){
   updateStartButtonLabel();
   if(verdict==='Victoire') myWins++; else if(verdict==='Défaite') oppWins++;
   updateScoreLabels();
+  try{ updateInputLock(); }catch{}
 }
 // références doublons supprimées (gérées au début du fichier et dans init())
 
@@ -1775,6 +1808,7 @@ function onRoomClosed(){
   // stopper le jeu si une boucle tournait encore
   running=false; paused=false; fx.stopMusic();
   showStart();
+  try{ updateInputLock(); }catch{}
   // fermer modales éventuelles
   try{ dlgGameOver && dlgGameOver.close(); }catch{}
   try{ dlgResult && dlgResult.close(); }catch{}

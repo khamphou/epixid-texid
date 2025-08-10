@@ -70,12 +70,15 @@
             <div class="join-panel">
               <div class="join-panel-header">
                 <div class="join-tabs">
-                  <button id="tab-rooms" class="tab active">Salons</button>
+                  <button id="tab-rooms" class="tab active">Parties</button>
                   <button id="tab-players" class="tab">Joueurs</button>
                 </div>
                 <div class="join-actions">
-                  <button id="btn-join-create" class="btn primary">Créer un salon</button>
-                  <button id="btn-join-back" class="btn ghost sm" title="Retour à l'accueil">⟵ Accueil</button>
+                  <button id="btn-join-create" class="btn primary">Créer une partie</button>
+                  <button id="btn-join-back" class="btn danger sm" title="Retour à l'accueil" aria-label="Accueil">
+                    <svg class="ico" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10 17l5-5-5-5v10zm-6-9h2v8H4V8zm12-6H8a2 2 0 00-2 2v2h2V4h8v16H8v-2H6v2a2 2 0 002 2h8a2 2 0 002-2V4a2 2 0 00-2-2z"/></svg>
+                    <span class="visually-hidden">Accueil</span>
+                  </button>
                 </div>
               </div>
               <div class="join-panel-body">
@@ -87,24 +90,40 @@
           </div>
         </div>
         <div class="join-summary-band">
-          <div id="rooms-summary" class="rooms-summary">Salons: – • Joueurs connectés: – • Parties en cours: –</div>
+          <div id="rooms-summary" class="rooms-summary">Parties: – • Joueurs connectés: – • Parties en cours: –</div>
         </div>
       </div>
     </section>
 
     <!-- Écran de jeu -->
     <div id="app" class="screen">
-  <header class="topbar">
-  <div class="brand"><h1 class="app-title">TEXID</h1></div>
+      <header class="topbar">
+        <div class="brand"><h1 class="app-title">TEXID</h1></div>
         <div class="controls">
-          <button id="btn-new" class="btn">Nouvelle partie</button>
-          <button id="btn-leaderboard" class="btn">Top 10</button>
-          <button id="btn-help" class="btn" title="Aide et contrôles">Aide</button>
-          <button id="btn-mp-leave" class="btn" title="Quitter le salon">Quitter</button>
-          <label class="toggle" title="Affiche le meilleur point de chute (avec anticipation de la prochaine pièce)">
-            <input type="checkbox" id="easy-toggle" />
-            <span>Mode Easy</span>
-          </label>
+          <button id="btn-leaderboard" class="btn" title="Top 10" aria-label="Top 10">
+            <svg class="ico" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 21V8h6v13H9zm8 0V4h4v17h-4zM3 21v-9h4v9H3z"/></svg>
+            <span class="visually-hidden">Top 10</span>
+          </button>
+          <button id="btn-help" class="btn" title="Aide" aria-label="Aide">
+            <svg class="ico" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92A3.5 3.5 0 0013 14h-2v-.5c0-.83.34-1.58.88-2.12l1.24-1.26a1.5 1.5 0 10-2.12-2.12c-.4.4-.62.94-.62 1.5H8a4 4 0 117.07 2.37z"/></svg>
+            <span class="visually-hidden">Aide</span>
+          </button>
+          <button id="easy-btn" class="btn toggle" aria-pressed="false" title="Mode Easy (affiche le meilleur point de chute)">
+            <svg class="ico" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M13 3L4 14h6l-1 7 9-11h-6l1-7z"/></svg>
+            <span class="visually-hidden">Mode Easy</span>
+          </button>
+          <button id="btn-new" class="btn" title="Nouvelle partie / Prêt" aria-label="Nouvelle partie">
+            <!-- Icône Solo: Plus -->
+            <svg class="ico ico-plus" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M11 4h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
+            <!-- Icônes Multi: Pouce haut / bas -->
+            <svg class="ico ico-thumb-up" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M2 21h4V9H2v12zm20-11c0-1.1-.9-2-2-2h-6l1-4-6 7v9h11c1.1 0 2-.9 2-2v-8z"/></svg>
+            <svg class="ico ico-thumb-down" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M2 3h4v12H2V3zm20 11c0 1.1-.9 2-2 2h-6l1 4-6-7V4h11c1.1 0 2 .9 2 2v8z"/></svg>
+            <span class="visually-hidden">Nouvelle partie</span>
+          </button>
+          <button id="btn-mp-leave" class="btn danger" title="Quitter" aria-label="Quitter">
+            <svg class="ico" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10 17l5-5-5-5v10zm-6-9h2v8H4V8zm12-6H8a2 2 0 00-2 2v2h2V4h8v16H8v-2H6v2a2 2 0 002 2h8a2 2 0 002-2V4a2 2 0 00-2-2z"/></svg>
+            <span class="visually-hidden">Quitter</span>
+          </button>
         </div>
       </header>
 
@@ -136,6 +155,11 @@
           <div class="panel status">
             <div class="stat"><span>Niveau</span><strong id="level">1 — Pepouz</strong></div>
             <div class="stat big"><span>Score</span><strong id="score">0</strong></div>
+            <div class="stat"><span>Lignes</span><strong id="lines">0</strong></div>
+          </div>
+          <div id="panel-mp" class="panel board">
+            <h2>Multijoueur</h2>
+            <ul id="players-list" class="players-list"></ul>
           </div>
 
           <div class="panel next">
@@ -150,16 +174,6 @@
             <h2>Adversaire</h2>
             <canvas id="opp-mini" width="120" height="240" aria-label="Aperçu adversaire"></canvas>
           </div>
-
-
-          <div id="panel-mp" class="panel board">
-            <h2>Multijoueur</h2>
-            <div class="mp-players">
-              <div>Moi: <span id="me-ready" class="badge">Pas prêt</span></div>
-              <div>Adversaire: <span id="opp-ready" class="badge">Pas prêt</span></div>
-            </div>
-            <ul id="players-list" class="players-list"></ul>
-          </div>
         </aside>
         <!-- Panneaux sous le plateau (mobile): statut + multijoueur -->
         <section id="under-panels" class="under-panels"></section>
@@ -167,7 +181,7 @@
 
       <footer class="bottombar">
         <span id="player-tag">Joueur: <strong id="player-name">–</strong></span>
-        <span id="room-tag" class="hidden">Salon: <strong id="room-id">–</strong></span>
+    <span id="room-tag" class="hidden">Partie: <strong id="room-id">–</strong></span>
       </footer>
     </div>
 
@@ -201,7 +215,7 @@
         <div id="result-lines">–</div>
         <menu>
           <button id="res-replay" class="primary">Rejouer</button>
-          <button id="res-leave">Quitter le salon</button>
+          <button id="res-leave">Quitter la partie</button>
         </menu>
       </div>
     </dialog>
@@ -210,6 +224,7 @@
       <div class="modal-content">
         <h3>Quitter</h3>
         <p>Quitter le salon et revenir à l’écran de titre ?</p>
+  <p>Quitter la partie et revenir à l’écran de titre ?</p>
         <menu>
           <button id="cancel-leave">Annuler</button>
           <button id="confirm-leave" class="primary">Quitter</button>

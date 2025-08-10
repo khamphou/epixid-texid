@@ -243,6 +243,8 @@ let isOwner = false;
 let myReady = false;
 let peerReady = false;
 let lastArrowDownTs = 0;
+let linesClearedTotal = 0; // total de lignes supprimées (HUD)
+let hideActivePiece = false; // en multi avant départ
 // Auto-shift horizontal (DAS/ARR)
 let hDir = 0; // -1 gauche, 1 droite
 let hHoldStart = 0;
@@ -271,9 +273,13 @@ let joinPlayersCache = [];
 // Effet stress visuel à appliquer sur le plateau adverse (quand on l’envoie)
 let oppStressUntil = 0;
 let oppStressCount = 0;
+// Invite toast guard pour le bouton Prêt (éviter le spam)
+let inviteToastShown = false;
+let _toastTO = null;
 
 function resetGrid(){
   grid = Array.from({length:ROWS},()=>Array(COLS).fill(null));
+  linesClearedTotal = 0;
 }
 
 function refillBag(){
@@ -332,9 +338,10 @@ function lock(){
   score += points;
   elScore.textContent = score;
   try{ elScore.classList.remove('pulse'); void elScore.offsetWidth; elScore.classList.add('pulse'); setTimeout(()=> elScore.classList.remove('pulse'), 360); }catch{}
-    // Audio + FX
+  // Audio + FX
     fx.linesCleared(cleared, level);
     flashLines(cleared);
+  linesClearedTotal += cleared; updateHUD();
     // Si 3 ou 4 lignes: envoyer un signal de stress à l'adversaire
     if(roomId && (cleared>=3)){
       try{ mpSend({ type:'stress', count: cleared }); }catch{}
@@ -362,15 +369,39 @@ function clearLines(){
 }
 
 function rotate(){
+  // Rotation avec conservation approximative du centre et petits "kicks"
   const rot = rotateCW(active.mat);
-  if(!collide(x,y,rot)){
-    active.mat = rot;
-    fx.rotate();
-  rotFxStart = performance.now();
-    // mise à jour hint
-    computeHint();
-  broadcastState();
+  // Centre de masse (en cellules) avant/après pour ajuster le pivot
+  const getCenter = (mat, ox, oy)=>{
+    let sx=0, sy=0, c=0;
+    for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(mat[j][i]){ sx += (ox+i+0.5); sy += (oy+j+0.5); c++; }
+    if(!c) return { cx: ox+2, cy: oy+2 };
+    return { cx: sx/c, cy: sy/c };
+  };
+  const prevC = getCenter(active.mat, x, y);
+  const newC0 = getCenter(rot, x, y);
+  // Ajustement initial pour garder le centre stable
+  const baseDx = Math.round(prevC.cx - newC0.cx);
+  const baseDy = Math.round(prevC.cy - newC0.cy);
+  const candidates = [
+    [0, 0],
+    [baseDx, baseDy],
+    [baseDx+1, baseDy], [baseDx-1, baseDy], [baseDx, baseDy-1], [baseDx, baseDy+1],
+    [baseDx+2, baseDy], [baseDx-2, baseDy],
+    // fallback kicks classiques
+    [1,0],[ -1,0],[0,-1],[2,0],[-2,0]
+  ];
+  for(const [dx,dy] of candidates){
+    if(!collide(x+dx, y+dy, rot)){
+      x += dx; y += dy; active.mat = rot;
+      fx.rotate();
+      rotFxStart = performance.now();
+      computeHint();
+      broadcastState();
+      return;
+    }
   }
+  // Si aucun kick ne passe, ne pas tourner
 }
 
 function move(dx){
@@ -470,16 +501,20 @@ function draw(){
     }
   }
   // pièce active
-  for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(active.mat[j][i]){
-    drawCell(x+i,y+j,COLORS[active.key], true);
+  if(!(roomId && !mpStarted)){
+    for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(active.mat[j][i]){
+      drawCell(x+i,y+j,COLORS[active.key], true);
+    }
   }
 
     // Ombre projetée (ghost) + guides (Easy uniquement)
   const landing = getLandingY(x, y, active.mat);
-  drawGhost(x, landing, active);
-  if(easyMode){
-    drawLandingVerticals(x, landing, active.mat);
-    drawLandingEdges(x, landing, active.mat);
+  if(!(roomId && !mpStarted)){
+    drawGhost(x, landing, active);
+    if(easyMode){
+      drawLandingVerticals(x, landing, active.mat);
+      drawLandingEdges(x, landing, active.mat);
+    }
   }
 
     // Effet arcs lumineux si rotation récente
@@ -774,8 +809,10 @@ function updateHUD(){
   // niveau numérique (1..10) + nom
   const lvl = Math.min(10, Math.max(1, Number(level||1)));
   const nameIdx = Math.min(LEVEL_NAMES.length-1, lvl-1);
-  elLevel && (elLevel.textContent = `${lvl} — ${LEVEL_NAMES[nameIdx]}`);
+  // Afficher uniquement le libellé du niveau (sans nombre ni tiret)
+  elLevel && (elLevel.textContent = `${LEVEL_NAMES[nameIdx]}`);
   elScore && (elScore.textContent = score);
+  try{ const elLines = document.getElementById('lines'); if(elLines) elLines.textContent = String(linesClearedTotal||0); }catch{}
 }
 
 function updateScoreLabels(){
@@ -843,7 +880,16 @@ function start(){
   score = 0; level = 1; speedMs = START_SPEED_MS; lastSpeedup = 0; step.last = 0;
   selfDead = false; opponentDead = false; opponentActive = null;
   gameStartAt = performance.now();
-  resetGrid(); nextQueue = []; bag = []; spawn(); updateHUD(); renderTop10();
+  resetGrid(); nextQueue = []; bag = [];
+  // préparer l’aperçu mais ne pas afficher d’actif si en multi avant start
+  if(roomId){
+    // remplir la file d’attente pour le preview
+    if(nextQueue.length<2){ while(nextQueue.length<2){ nextQueue.push(nextFromBag()); } }
+    drawNext();
+  } else {
+    spawn();
+  }
+  updateHUD(); renderTop10();
   // Nettoyer effets/overlays résiduels
   try{ fxCtx.clearRect(0,0,fxCvs.width,fxCvs.height); fxCvs.style.transform=''; }catch{}
   cancelServerCountdown();
@@ -931,10 +977,18 @@ function togglePause(){
 ;(function setupPointerControls(){
   if(!cvs) return;
   try{ cvs.style.touchAction = 'none'; }catch{}
+  // Clic souris: gérer explicitement pour distinguer clic court vs drag
+  try{
+    cvs.addEventListener('contextmenu', (e)=>{
+      e.preventDefault();
+      if(!isInputLocked()) rotate();
+    });
+  }catch{}
   let pid = null;
   let pActive = false;
   let startX=0, startY=0, lastX=0, lastY=0, startT=0;
   let accX=0, accY=0; // accumulateurs pour pas de déplacement
+  let downButton = 0; // 0:gauche, 2:droit sur souris
   const TAP_MS = 220;
   const TAP_DIST = 12; // px
   const H_STEP = 20; // px par pas horizontal
@@ -960,6 +1014,7 @@ function togglePause(){
     if(!canControl()) return;
     try{ cvs.setPointerCapture(ev.pointerId); pid = ev.pointerId; }catch{}
     pActive = true; startX = lastX = ev.clientX; startY = lastY = ev.clientY; startT = performance.now();
+    downButton = (typeof ev.button === 'number') ? ev.button : 0;
     accX = 0; accY = 0;
     // éviter le scroll/bounce
     try{ ev.preventDefault(); }catch{}
@@ -986,7 +1041,13 @@ function togglePause(){
     // Tap court -> rotation
     const dist2 = totalDX*totalDX + totalDY*totalDY;
     if(dt <= TAP_MS && dist2 <= (TAP_DIST*TAP_DIST)){
-      rotate();
+      // Spécifique souris: clic gauche court = hard drop; tactile/stylet = rotation
+      if(ev.pointerType === 'mouse'){
+        if(downButton === 0){ if(!isInputLocked()) hardDrop(); }
+        // le clic droit est géré via contextmenu
+      } else {
+        rotate();
+      }
     } else {
       // Flick bas rapide -> hard drop
       const vy = totalDY / dt; // px/ms
@@ -997,6 +1058,7 @@ function togglePause(){
     try{ cvs.releasePointerCapture(ev.pointerId); }catch{}
     pActive = false; pid = null;
     accX = accY = 0;
+    downButton = 0;
     try{ ev.preventDefault(); }catch{}
   }
   cvs.addEventListener('pointerdown', onDown, { passive:false });
@@ -1072,6 +1134,8 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
 
 // Init
 (async function init(){
+  // Empêcher le flash de scrollbars pendant l'init (calculs layout)
+  try{ document.documentElement.classList.add('init-lock'); document.body.classList.add('init-lock'); }catch{}
   if(playerName) elPlayerName.textContent = playerName; else await askName();
   // Taille gérée par fitBoardToContainer selon breakpoint
   resetGrid();
@@ -1080,11 +1144,13 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
   try{ setTimeout(()=>{ placeMPPanel(); fitBoardToContainer(); draw(); }, 0); }catch{}
   draw();
   renderTop10();
-  // Toggle Mode Easy
-  const toggle = document.getElementById('easy-toggle');
-  if(toggle){
-    easyMode = toggle.checked;
-    toggle.addEventListener('change', ()=>{ easyMode = toggle.checked; computeHint(); });
+  // Toggle Mode Easy via bouton (plus de checkbox)
+  const easyBtn = document.getElementById('easy-btn');
+  if(easyBtn){
+    easyMode = false; // OFF par défaut
+    const sync = ()=>{ easyBtn.setAttribute('aria-pressed', easyMode ? 'true' : 'false'); easyBtn.classList.toggle('active', !!easyMode); computeHint(); };
+    sync();
+    easyBtn.addEventListener('click', ()=>{ easyMode = !easyMode; sync(); });
   }
   // Navigation écrans
   if(btnStartSolo){ btnStartSolo.addEventListener('click', (e)=>{ try{ e.stopPropagation(); }catch{} showGame(); start(); }); }
@@ -1160,12 +1226,12 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
   if(btnJoinCreate){ btnJoinCreate.addEventListener('click', ()=>{ createRoom(); /* basculera vers le jeu à 'joined' */ }); }
   // bouton Rafraîchir retiré (plus de binding nécessaire)
   if(btnJoinBack){ btnJoinBack.addEventListener('click', ()=> showStart()); }
-  // Onglets (Salons / Joueurs)
+  // Onglets (Parties / Joueurs)
   if(tabRooms){ tabRooms.addEventListener('click', ()=>{ setJoinTab('rooms'); fetchRoomsJoin(); }); }
   if(tabPlayers){ tabPlayers.addEventListener('click', ()=>{ setJoinTab('players'); fetchPlayersJoin(); }); }
   if(mpCloseBtn){ mpCloseBtn.addEventListener('click', closeRoom); }
   if(mpLeaveBtn){
-    // Quitter: pas de boîte de dialogue; retour direct titre + fermeture salon si besoin
+  // Quitter: pas de boîte de dialogue; retour direct titre + fermeture partie si besoin
     mpLeaveBtn.addEventListener('click', ()=>{
       if(roomId){
   leaveRoom();
@@ -1236,6 +1302,8 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
   }catch{}
   try{ updateInputLock(); }catch{}
 
+  // Lever le verrou scroll après premier fit/draw
+  try{ setTimeout(()=>{ document.documentElement.classList.remove('init-lock'); document.body.classList.remove('init-lock'); }, 60); }catch{}
 })();
 
 
@@ -1253,7 +1321,7 @@ function setJoinTab(which){
   // empty-state visibility is managed by render functions, keep as-is
 }
 
-// Onglet par défaut: Salons
+// Onglet par défaut: Parties
 setJoinTab('rooms');
 
 function ensureMusicMode(){
@@ -1335,8 +1403,8 @@ function connectWS(){
           // Mettre à jour l'onglet "Joueurs" (écran Rejoindre) et le cache pour le résumé
           joinPlayersCache = Array.isArray(msg.players) ? msg.players : [];
           renderPlayersJoin(joinPlayersCache);
-          // rafraîchir le résumé des salons avec le nombre total de joueurs connectés
-          // (on réutilise la dernière liste de salons affichée via fetchRoomsJoin polling)
+          // rafraîchir le résumé des parties avec le nombre total de joueurs connectés
+          // (on réutilise la dernière liste de parties affichée via fetchRoomsJoin polling)
           // Le prochain tick de polling mettra aussi à jour, donc c'est best-effort
           break;
         case 'joined':
@@ -1359,7 +1427,7 @@ function connectWS(){
           if(isOwner){ try{ ws && ws.readyState===1 && ws.send(JSON.stringify({type:'ready', ready:true})); }catch{} }
           // envoyer notre nom au serveur pour que l'autre voie notre pseudo
           if(ws && ws.readyState===1 && playerName){ ws.send(JSON.stringify({ type:'name', name: playerName })); }
-          // afficher l'ID du salon
+          // afficher l'ID de la partie
           if(roomTag && roomIdEl){ roomIdEl.textContent = roomId; roomTag.classList.remove('hidden'); }
           break;
         case 'state':
@@ -1382,15 +1450,14 @@ function connectWS(){
         case 'peer': {
           const was = !!peerConnected;
           peerConnected = !!msg.connected;
-          if(peerConnected){
+      if(peerConnected){
             try{ fx.playJoinerSfx(); }catch{}
             showWaiting(false);
             try{ updateInputLock(); }catch{}
             // Annonce d'arrivée quand un joueur rejoint une partie ouverte
             if(!was){
               const nm = (msg && msg.name) || 'Un joueur';
-              showToast(`${escapeHtml(nm)} a rejoint la partie`);
-              setTimeout(()=>{ if(toastEl) toastEl.classList.add('hidden'); }, 3000);
+        showToast(`${escapeHtml(nm)} a rejoint la partie`, 3000);
             }
           } else {
             // l'autre joueur est absent. Ne pas écraser mon état "Prêt" (ex: hôte prêt par défaut)
@@ -1406,7 +1473,7 @@ function connectWS(){
             try{ updateInputLock(); }catch{}
             if(was){
               const leaverName = (msg && (msg.name || null)) || (document.getElementById('opp-label')?.textContent) || 'Le joueur';
-              showToast(`${leaverName} a quitté la partie`);
+              showToast(`${leaverName} a quitté la partie`, 3000);
             }
           }
           updateOpponentVisibility(); updateStartButtonLabel(); renderPlayersList();
@@ -1431,18 +1498,16 @@ function connectWS(){
             // fallback historique (sans "who"): traiter comme l'état de l'adversaire
             peerReady = !!msg.ready;
           }
-          updateReadyBadges(); renderPlayersList();
+          updateReadyBadges(); renderPlayersList(); updateStartButtonLabel();
         } break;
         case 'countdown': onServerCountdown(msg.seconds||5); break;
         case 'countdown_cancel': cancelServerCountdown(); break;
         case 'start': onMatchStart(msg.seed); break;
         case 'matchover': onMatchOver(msg.scores); break;
         case 'room_closed': {
-          // Afficher un message spécifique si l'hôte nous a éjecté ou a quitté
-          const name = (roomMeta && roomMeta.ownerName) || 'L’hôte';
-          showToast(`${name} a quitté la partie. Retour au salon…`);
-          // revenir à l’écran join après 5s
-          setTimeout(()=>{ onRoomClosed(); showJoin(); }, 5000);
+          // Pas de toast demandé quand l’hôte quitte; retour direct à l’écran des parties
+          onRoomClosed();
+          showJoin();
         } break;
         case 'names': {
           const arr = msg.list || [];
@@ -1500,7 +1565,7 @@ async function createRoom(){
     showToast('Connexion serveur indisponible.');
     return;
   }
-  const randomName = 'Salon-' + Math.random().toString(36).slice(2,6).toUpperCase();
+  const randomName = 'Partie-' + Math.random().toString(36).slice(2,6).toUpperCase();
   let myTop = 0;
   try{
     const list = await apiTop10List();
@@ -1508,7 +1573,7 @@ async function createRoom(){
   }catch{}
   try{ ws.send(JSON.stringify({type:'create', name: randomName, ownerName: playerName||'Player', ownerTop: myTop })); }catch{}
   // Rester sur l’écran courant: on basculera vers le jeu à la réception de 'joined'
-  // Mettre à jour la liste des salons pour afficher rapidement le nouveau salon
+  // Mettre à jour la liste des parties pour afficher rapidement la nouvelle partie
   fetchRoomsJoin();
 }
 
@@ -1553,19 +1618,19 @@ async function fetchPlayersJoin(){
 function renderRoomsJoin(rooms){
   if(!roomsJoin) return;
   roomsJoin.innerHTML = '';
-  // Ne modifier le titre que si l'onglet Salons est actif
-  if(joinTitle && tabRooms && tabRooms.classList.contains('active')) joinTitle.textContent = 'Salons';
+  // Ne modifier le titre que si l'onglet Parties est actif
+  if(joinTitle && tabRooms && tabRooms.classList.contains('active')) joinTitle.textContent = 'Parties';
   // Stats globales (côté serveur uniquement)
  
   const total = Number(rooms.length||0);
-  // joueurs connectés = tous les joueurs actifs côté serveur, pas seulement dans les salons
+  // joueurs connectés = tous les joueurs actifs côté serveur, pas seulement dans les parties
   const players = Array.isArray(joinPlayersCache) ? joinPlayersCache.length : 0;
   const inBattle = rooms.reduce((s,r)=> s + (r.started?1:0), 0);
-  if(roomsSummary){ roomsSummary.textContent = `Salons: ${total} • Joueurs connectés: ${players} • Parties en cours: ${inBattle}`; }
+  if(roomsSummary){ roomsSummary.textContent = `Parties: ${total} • Joueurs connectés: ${players} • Parties en cours: ${inBattle}`; }
   // Tri: non pleins d'abord, puis en bataille, puis récents
   const statusRank = (r)=> (r.count<2 ? 0 : (r.started?1:2));
   const sorted = rooms.slice().sort((a,b)=> statusRank(a)-statusRank(b) || (b.lastEndedTs||0)-(a.lastEndedTs||0));
-  // Empty state uniquement si l'onglet Salons est actif
+  // Empty state uniquement si l'onglet Parties est actif
   if(tabRooms && tabRooms.classList.contains('active')){
     if(sorted.length===0 && joinEmpty){ joinEmpty.classList.remove('hidden'); }
     else if(joinEmpty){ joinEmpty.classList.add('hidden'); }
@@ -1600,7 +1665,7 @@ function renderPlayersJoin(players){
   if(joinTitle && tabPlayers && tabPlayers.classList.contains('active')) joinTitle.textContent = 'Joueurs';
   const now = Date.now();
   const sorted = (players||[]).slice().sort((a,b)=>{
-    // ordre: d'abord ceux en salon (room non nul), puis par nom croissant
+  // ordre: d'abord ceux en partie (room non nul), puis par nom croissant
     const ar = a.room?0:1, br = b.room?0:1; if(ar!==br) return ar-br;
     const an = (a.name||'').toLowerCase();
     const bn = (b.name||'').toLowerCase();
@@ -1615,7 +1680,7 @@ function renderPlayersJoin(players){
     const li = document.createElement('li');
     const age = Math.max(0, Math.floor((now - (p.lastSeen||0))/1000));
     const nm = p.name || 'Joueur';
-    const room = p.room ? `Salon: ${p.room}` : '—';
+  const room = p.room ? `Partie: ${p.room}` : '—';
     li.innerHTML = `<span>${nm}</span><span class="badge">${room} • ${age}s</span>`;
     playersJoin.appendChild(li);
   });
@@ -1749,6 +1814,8 @@ function toggleReady(){
   updateReadyBadges();
   updateStartButtonLabel();
   if(!myReady){ cancelServerCountdown(); }
+  // si on vient de repasser en "pas prêt", autoriser à ré-afficher l'invite plus tard
+  if(!myReady){ inviteToastShown = false; }
   ws && ws.readyState===1 && ws.send(JSON.stringify({type:'ready', ready:myReady}));
 }
 
@@ -1759,6 +1826,7 @@ function onMatchStart(seedStr){
   score = 0; opponentScore = 0; elScore && (elScore.textContent='0');
   updateScoreLabels();
   bag = []; nextQueue = [];
+  linesClearedTotal = 0;
   opponentDead = false; opponentActive = null; selfDead = false;
   // démarrer immédiatement (le serveur a affiché le compte à rebours)
   cancelServerCountdown();
@@ -1766,6 +1834,7 @@ function onMatchStart(seedStr){
   // conserver l’état "Prêt" affiché durant la manche
   updateReadyBadges();
   updateStartButtonLabel();
+  inviteToastShown = true; // plus d'invite pendant la manche
   try{ updateInputLock(); }catch{}
 }
 
@@ -1792,11 +1861,13 @@ function onMatchOver(scores){
   if(verdict==='Victoire') myWins++; else if(verdict==='Défaite') oppWins++;
   updateScoreLabels();
   try{ updateInputLock(); }catch{}
+  // autoriser une future invite
+  inviteToastShown = false;
 }
 // références doublons supprimées (gérées au début du fichier et dans init())
 
 function onRoomClosed(){
-  // Le salon est fermé (par l'hôte ou purge). Ici on revient à l'écran de titre.
+  // La partie est fermée (par l'hôte ou purge). Ici on revient à l'écran de titre.
   roomId = null; peerConnected = false; opponentScore = 0;
   opponentGrid = Array.from({length:ROWS},()=>Array(COLS).fill(null));
   if(oppScoreEl) oppScoreEl.textContent = '0';
@@ -1815,16 +1886,17 @@ function onRoomClosed(){
   // reset compteurs de victoires
   if(meScoreEl) meScoreEl.textContent = '0';
   if(oppScoreEl) oppScoreEl.textContent = '0';
-  // masquer l'ID du salon
+  // masquer l'ID de la partie
   if(roomTag){ roomTag.classList.add('hidden'); }
+  inviteToastShown = false;
 }
 function updateOwnerUI(){
   if(mpCloseBtn){ mpCloseBtn.disabled = !isOwner; }
 }
 
 function updateReadyBadges(){
-  if(meReadyEl){ meReadyEl.textContent = myReady ? 'Prêt' : 'Pas prêt'; meReadyEl.classList.toggle('ready', myReady); meReadyEl.classList.toggle('wait', !myReady); }
-  if(oppReadyEl){ oppReadyEl.textContent = peerReady ? 'Prêt' : 'Pas prêt'; oppReadyEl.classList.toggle('ready', peerReady); oppReadyEl.classList.toggle('wait', !peerReady); }
+  if(meReadyEl){ meReadyEl.textContent = myReady ? '✔' : '✖'; meReadyEl.classList.toggle('ready', myReady); meReadyEl.classList.toggle('wait', !myReady); }
+  if(oppReadyEl){ oppReadyEl.textContent = peerReady ? '✔' : '✖'; oppReadyEl.classList.toggle('ready', peerReady); oppReadyEl.classList.toggle('wait', !peerReady); }
   renderPlayersList();
 }
 
@@ -1880,11 +1952,14 @@ function fitBoardToContainer(){
   if(!cvs || !cvs.parentElement) return;
   const isMobile = !!(window.matchMedia && window.matchMedia('(max-width: 900px)').matches);
   if(!isMobile){
-    // Desktop: en solo, agrandir le plateau selon l'espace; en multi, rester sur 300x600
+    // Desktop: agrandir le plateau selon l'espace disponible (solo et multi)
     const app = document.getElementById('app');
     const isSolo = !!(app && app.classList.contains('solo-mode'));
     // Mesures d'espace dispo
-    const gap = 16; // gap de la grille desktop
+    const gridGap = 20; // gap de la grille desktop (voir .layout{gap:20px})
+    // écart entre les deux plateaux (voir --board-gap en CSS)
+    let boardGapVal = 26;
+    try{ const v = getComputedStyle(document.documentElement).getPropertyValue('--board-gap'); const n = parseInt(v,10); if(Number.isFinite(n)) boardGapVal = n; }catch{}
     let topH=0, botH=0;
     try{
       const topbar = document.querySelector('.topbar');
@@ -1894,17 +1969,22 @@ function fitBoardToContainer(){
     }catch{}
     const appEl = document.getElementById('app');
     const appPadX = 32; // padding latéral ~16px * 2
+    const appPadY = 24; // padding vertical ~12px * 2
     const appW = (appEl ? appEl.clientWidth : window.innerWidth) - appPadX;
-    const viewH = window.innerHeight - topH - botH - 48; // marge de respiration
+    // Hauteur utile: viewport - topbar - margeBottom topbar - bottombar - padding vertical du conteneur - petite marge
+    let topbarMargin = 0; try{ const tb = document.querySelector('.topbar'); if(tb){ const cs = getComputedStyle(tb); topbarMargin = parseFloat(cs.marginBottom)||0; } }catch{}
+    const viewH = window.innerHeight - topH - topbarMargin - botH - appPadY - 6;
     // Sidebar desktop fixe 300px
     const sidebarW = 300;
-    if(isSolo){
-      // Largeur disponible pour le plateau (colonne gauche)
-      const maxWFromWidth = Math.max(280, Math.floor(appW - sidebarW - gap));
-      const maxWFromHeight = Math.max(280, Math.floor(viewH / 2));
+    {
+      // Largeur disponible pour un plateau (colonne gauche contient 2 plateaux + boardGap)
+      const maxWFromWidth = Math.max(280, Math.floor((appW - sidebarW - gridGap - boardGapVal) / 2));
+      // Contrainte hauteur: h_canvas = 2 * w_canvas, et la frame ajoute ~20px
+      const frameExtraH = 20;
+      const maxWFromHeight = Math.max(280, Math.floor((viewH - frameExtraH) / 2));
       let targetW = Math.min(maxWFromWidth, maxWFromHeight);
-  // bornes raisonnables (élargies pour réduire l'espace vide en solo desktop)
-  targetW = Math.max(300, Math.min(820, targetW));
+  // bornes raisonnables (élargies pour réduire l'espace vide en desktop)
+  targetW = Math.max(300, Math.min(880, targetW));
   TILE = Math.max(16, Math.min(56, Math.floor(targetW / COLS)));
       const pxW = TILE * COLS;
       const pxH = TILE * ROWS;
@@ -1912,26 +1992,19 @@ function fitBoardToContainer(){
       if(cvs.height !== pxH) cvs.height = pxH;
       if(fxCvs.width !== pxW) fxCvs.width = pxW;
       if(fxCvs.height !== pxH) fxCvs.height = pxH;
+      // Opponent canvas même dimension en desktop
+      if(oppCvs){
+        if(oppCvs.width !== pxW) oppCvs.width = pxW;
+        if(oppCvs.height !== pxH) oppCvs.height = pxH;
+        oppCvs.style.width = pxW + 'px';
+        oppCvs.style.height = pxH + 'px';
+      }
       cvs.style.width = pxW + 'px';
       cvs.style.height = pxH + 'px';
       fxCvs.style.width = pxW + 'px';
       fxCvs.style.height = pxH + 'px';
       // Mettre à jour la variable CSS --board-w (canvas + padding/bordure ≈ 22px)
       try{ document.documentElement.style.setProperty('--board-w', (pxW + 22) + 'px'); }catch{}
-      return;
-    } else {
-      // Multi: taille fixe
-      TILE = 30;
-      if(cvs.width !== COLS*TILE) cvs.width = COLS*TILE;
-      if(cvs.height !== ROWS*TILE) cvs.height = ROWS*TILE;
-      if(fxCvs.width !== COLS*TILE) fxCvs.width = COLS*TILE;
-      if(fxCvs.height !== ROWS*TILE) fxCvs.height = ROWS*TILE;
-      cvs.style.width = cvs.width + 'px';
-      cvs.style.height = cvs.height + 'px';
-      fxCvs.style.width = fxCvs.width + 'px';
-      fxCvs.style.height = fxCvs.height + 'px';
-      // Remettre --board-w sur la valeur par défaut (322px) si besoin
-      try{ document.documentElement.style.setProperty('--board-w', '322px'); }catch{}
       return;
     }
   }
@@ -1970,6 +2043,13 @@ function fitBoardToContainer(){
   if(cvs.height !== pxH) cvs.height = pxH;
   if(fxCvs.width !== pxW) fxCvs.width = pxW;
   if(fxCvs.height !== pxH) fxCvs.height = pxH;
+  // Opponent canvas même dimension en mobile
+  if(oppCvs){
+    if(oppCvs.width !== pxW) oppCvs.width = pxW;
+    if(oppCvs.height !== pxH) oppCvs.height = pxH;
+    oppCvs.style.width = pxW + 'px';
+    oppCvs.style.height = pxH + 'px';
+  }
   // appliquer tailles CSS pour l’affichage (peuvent différer légèrement)
   cvs.style.width = pxW + 'px';
   cvs.style.height = pxH + 'px';
@@ -2005,24 +2085,54 @@ function updateOpponentVisibility(){
 // ---------- UI helpers ----------
 function updateStartButtonLabel(){
   if(!btnNew) return;
-  // En salon: montrer toujours "Je suis prêt"; désactiver tant qu'aucun adversaire
+  // Helpers pour afficher l'icône contextuelle
+  const showIcon = (which)=>{
+    try{
+      const plus = btnNew.querySelector('.ico-plus');
+  const up = btnNew.querySelector('.ico-thumb-up');
+  const down = btnNew.querySelector('.ico-thumb-down');
+  if(plus) plus.style.display = (which==='plus')? '' : 'none';
+  if(up) up.style.display = (which==='up')? '' : 'none';
+  if(down) down.style.display = (which==='down')? '' : 'none';
+    }catch{}
+  };
+  // En partie: montrer toujours "Je suis prêt"; désactiver tant qu'aucun adversaire
   if(roomId){
     // Pendant une manche, masquer le bouton pour éviter les changements d'état
     if(mpStarted){
       btnNew.style.display = 'none';
     } else {
-      btnNew.style.display = '';
-      btnNew.textContent = 'Je suis prêt';
+  btnNew.style.display = '';
+  // En partie, on garde l'icône; on met à jour l'aria-label uniquement
+  btnNew.setAttribute('aria-label', myReady ? 'Prêt' : 'Pas prêt');
+  // Icône pouce selon prêt/pas prêt
+  showIcon(myReady ? 'up' : 'down');
       // Laisser cliquable même durant le compte à rebours pour permettre d'annuler
       btnNew.disabled = false;
       // Visibilité accrue: clignoter tant que je ne suis pas prêt
-      btnNew.classList.toggle('cta-blink', !myReady);
+      const blink = !myReady;
+      btnNew.classList.toggle('cta-blink', blink);
+      btnNew.classList.toggle('cta-strong', blink);
+      // Couleurs d'état demandées
+      btnNew.classList.toggle('ready', !!myReady);
+      btnNew.classList.toggle('attn', !myReady);
+      // Afficher une invite une fois quand l'adversaire est là et que je ne suis pas prêt
+      if(!inviteToastShown && peerConnected && !myReady){
+        showToast('Appuyez sur « Prêt » pour commencer la partie', 5000);
+        inviteToastShown = true;
+      }
     }
   } else {
     btnNew.style.display = '';
-    btnNew.textContent = 'Nouvelle partie';
+    // En solo, l’icône représente “Nouvelle partie” (texte masqué dans le HTML)
+    btnNew.setAttribute('aria-label', 'Nouvelle partie');
     btnNew.disabled = false;
     btnNew.classList.remove('cta-blink');
+    btnNew.classList.remove('cta-strong');
+    btnNew.classList.remove('ready');
+    btnNew.classList.remove('attn');
+  // Icône plus en solo
+  showIcon('plus');
   }
 }
 
@@ -2034,7 +2144,7 @@ function showStart(){
 let joinPoll = null;
 function showJoin(){
   setScreen('join');
-  // Onglet par défaut: Salons (Créer accessible uniquement ici)
+  // Onglet par défaut: Parties (Créer accessible uniquement ici)
   setJoinTab('rooms');
   fetchRoomsJoin();
   fetchPlayersJoin();
@@ -2046,6 +2156,7 @@ function showJoin(){
   resetIdleView();
 }
 function showGame(){
+  try{ document.body.classList.add('game-open'); }catch{}
   setScreen('game');
   if(joinPoll) { clearInterval(joinPoll); joinPoll = null; }
   try{ window.scrollTo({ top: 0, behavior: 'smooth' }); }catch{}
@@ -2053,7 +2164,21 @@ function showGame(){
   try{ dlgResult && dlgResult.close(); }catch{}
   // Si aucune manche ne tourne, basculer sur un état propre
   if(!running && !mpStarted){ resetIdleView(); }
-  try{ placeMPPanel(); fitBoardToContainer(); balanceUnderPanelsHeight(); }catch{}
+  // Mobile: séquence de chargement rapide pour éviter les sauts de layout
+  const isMobile = !!(window.matchMedia && window.matchMedia('(max-width: 900px)').matches);
+  if(isMobile){
+    try{ showToast('Chargement en cours…'); }catch{}
+    // Masquer temporairement les frames pour éviter le clignotement
+    try{ document.querySelectorAll('.boards .frame').forEach(f=> f.style.visibility='hidden'); }catch{}
+    setTimeout(()=>{
+      try{ placeMPPanel(); fitBoardToContainer(); balanceUnderPanelsHeight(); }catch{}
+      try{ document.querySelectorAll('.boards .frame').forEach(f=> f.style.visibility=''); }catch{}
+      draw(); positionToastForGame();
+      setTimeout(()=>{ if(toastEl) toastEl.classList.add('hidden'); }, 800);
+    }, 20);
+  } else {
+    try{ placeMPPanel(); fitBoardToContainer(); balanceUnderPanelsHeight(); }catch{}
+  }
   draw(); updateOpponentVisibility(); updateStartButtonLabel(); renderPlayersList();
   positionToastForGame();
 }
@@ -2061,6 +2186,7 @@ function setScreen(which){
   if(screenStart) screenStart.classList.toggle('active', which==='start');
   if(screenJoin) screenJoin.classList.toggle('active', which==='join');
   if(screenGame) screenGame.classList.toggle('active', which==='game');
+  try{ document.body.classList.toggle('game-open', which==='game'); }catch{}
   // démarrer/arrêter l'animation du héro selon l'écran
   if(which==='start'){ try{ startHeroAnimation(); }catch{} }
   else { try{ stopHeroAnimation(); }catch{} }
@@ -2080,28 +2206,40 @@ function showWaiting(on){
 function renderPlayersList(){
   if(!playersListEl) return;
   playersListEl.innerHTML = '';
-  // Afficher uniquement les joueurs du salon courant (Moi + Adversaire)
+  const icon = (r)=> r? '✔' : '✖';
+  const crop = (s)=>{ s = String(s||''); return s.length>8 ? (s.slice(0,8)+'…') : s; };
+  // Moi
   const me = document.createElement('li');
-  me.innerHTML = `<span>Moi</span><span class="badge">${Number(score||0)}</span>`;
+  me.innerHTML = `
+    <div class="row row1"><span class="name"><span class="st">${icon(myReady)}</span><span class="nm">${crop(playerName||'Moi')}</span></span></div>
+    <div class="row row2"><span class="sc">${Number(score||0)}</span></div>`;
   playersListEl.appendChild(me);
+  // Adversaire
   const opp = document.createElement('li');
   if(peerConnected){
     const name = (document.getElementById('opp-label')?.textContent)||'Adversaire';
-    opp.innerHTML = `<span>${name}</span><span class="badge">${Number(opponentScore||0)}</span>`;
+    opp.innerHTML = `
+      <div class="row row1"><span class="name"><span class="st">${icon(peerReady)}</span><span class="nm">${crop(name)}</span></span></div>
+      <div class="row row2"><span class="sc">${Number(opponentScore||0)}</span></div>`;
   } else {
-    opp.innerHTML = `<span>—</span><span class="badge">Absent</span>`;
+    opp.innerHTML = `
+      <div class="row row1"><span class="name"><span class="st">✖</span><span class="nm">—</span></span></div>
+      <div class="row row2"><span class="sc">–</span></div>`;
   }
   playersListEl.appendChild(opp);
 }
 
 // --------- Toast helper ---------
-function showToast(msg){
+function showToast(msg, dur){
   if(!toastEl) return;
   toastEl.innerHTML = `<span class="msg">${msg}</span>`;
   toastEl.classList.remove('hidden');
   // En jeu: centrage entre les plateaux
   if(screenGame && screenGame.classList.contains('active')){ positionToastForGame(); toastEl.classList.add('at-center'); }
-  setTimeout(()=>{ toastEl.classList.add('hidden'); }, 5000);
+  // annuler un hide en cours et programmer le nouveau
+  try{ if(_toastTO){ clearTimeout(_toastTO); _toastTO = null; } }catch{}
+  const delay = Math.max(0, Number(dur ?? 5000));
+  _toastTO = setTimeout(()=>{ try{ toastEl.classList.add('hidden'); }finally{ _toastTO=null; } }, delay);
 }
 
 function escapeHtml(s){
@@ -2142,62 +2280,23 @@ function formatDur(ms){
 // --------- Placement adaptatif du panneau Multijoueur ---------
 function placeMPPanel(){
   if(!panelMP) return;
-  const layout = document.querySelector('#app .layout');
   const sidebar = document.querySelector('#app .sidebar');
-  const under = document.getElementById('under-panels');
-  if(!layout || !sidebar) return;
-  const isMobile = !!(window.matchMedia && window.matchMedia('(max-width: 900px)').matches);
-  const appEl = document.getElementById('app');
-  const isSolo = !!(appEl && appEl.classList.contains('solo-mode'));
-  if(isMobile){
-    // Sidebar à droite: on garde Next et Aperçu adversaire dans la sidebar
-    try{
-      const panelNext = document.querySelector('#app .panel.next');
-      const oppPrev = document.querySelector('#app .panel.opp-preview');
-      if(panelNext && panelNext.parentElement !== sidebar) sidebar.appendChild(panelNext);
-      if(oppPrev && oppPrev.parentElement !== sidebar) sidebar.appendChild(oppPrev);
-    }catch{}
+  if(!sidebar) return;
+  try{
     const status = document.querySelector('#app .panel.status');
-  if(isSolo){
-      // SOLO: laisser le statut dans la sidebar, au-dessus de Next
-      if(status && status.parentElement !== sidebar){
-        // insérer avant le premier panel de la sidebar (Next s’il existe)
-        const firstPanel = sidebar.querySelector('.panel');
-        if(firstPanel){ sidebar.insertBefore(status, firstPanel); }
-        else { sidebar.appendChild(status); }
-      }
-      // MP (masqué en solo) peut rester où il est; pas de zone under nécessaire
-  } else {
-      // MULTI: Statut + Multijoueur sous le plateau, même rangée
-      if(under){
-        if(status){
-          status.style.removeProperty('grid-area');
-          status.style.removeProperty('gridColumn');
-          status.style.removeProperty('gridRow');
-          if(status.parentElement !== under) under.appendChild(status);
-        }
-        panelMP.style.removeProperty('grid-area');
-        panelMP.style.removeProperty('gridColumn');
-        panelMP.style.removeProperty('gridRow');
-        if(panelMP.parentElement !== under) under.appendChild(panelMP);
-      }
-    }
-    panelMP.style.removeProperty('grid-area');
-    panelMP.style.removeProperty('gridColumn');
-    panelMP.style.removeProperty('gridRow');
-  } else {
-    // Revenir en desktop: tous les panneaux dans la sidebar comme avant
-    try{
-      const status = document.querySelector('#app .panel.status');
-      const next = document.querySelector('#app .panel.next');
-      const oppPrev = document.querySelector('#app .panel.opp-preview');
-      if(status && status.parentElement !== sidebar) sidebar.appendChild(status);
-      if(next && next.parentElement !== sidebar) sidebar.appendChild(next);
-      if(oppPrev && oppPrev.parentElement !== sidebar) sidebar.appendChild(oppPrev);
-    }catch{}
-    if(panelMP.parentElement !== sidebar){ sidebar.appendChild(panelMP); }
-    panelMP.style.removeProperty('grid-area');
-  }
+    const next = document.querySelector('#app .panel.next');
+    const oppPrev = document.querySelector('#app .panel.opp-preview');
+  // Ordre: Status -> Blocs -> Multijoueur -> Miniature
+  if(status && status.parentElement !== sidebar) sidebar.appendChild(status);
+  if(next && next.parentElement !== sidebar) sidebar.appendChild(next);
+  if(panelMP && panelMP.parentElement !== sidebar) sidebar.appendChild(panelMP);
+    if(oppPrev && oppPrev.parentElement !== sidebar) sidebar.appendChild(oppPrev);
+    // Réordonner même s'ils sont déjà dans la sidebar
+  if(status) sidebar.insertBefore(status, sidebar.firstChild);
+  if(next) sidebar.insertBefore(next, status.nextSibling);
+  if(panelMP) sidebar.insertBefore(panelMP, next.nextSibling);
+  if(oppPrev) sidebar.insertBefore(oppPrev, panelMP.nextSibling);
+  }catch{}
 }
 
 // Uniformiser la hauteur des panneaux sous le plateau (mobile + multi)

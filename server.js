@@ -16,9 +16,16 @@ app.use(express.json());
 // CORS global pour les appels depuis Vite (dev) ou autre origine
 app.use((req, res, next)=>{
   try{
+    // Autoriser toutes origines publiques; pour restreindre, utilisez une liste blanche via env
     res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    // Autoriser dynamiquement les en-têtes demandés (inclut Cache-Control si présent)
+    const reqHdrs = req.headers['access-control-request-headers'];
+    if(reqHdrs){ res.setHeader('Access-Control-Allow-Headers', reqHdrs); }
+    else { res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Cache-Control'); }
+    // Optionnel: garder les préflight en cache côté navigateur
+    res.setHeader('Access-Control-Max-Age', '600');
   }catch{}
   if(req.method === 'OPTIONS'){
     try{ return res.sendStatus(204); }catch{ return; }

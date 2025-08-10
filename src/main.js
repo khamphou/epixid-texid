@@ -65,7 +65,7 @@ async function apiTop10List(mode){
   const base = getServerOrigin();
   const bust = `bust=${Date.now()}`;
   const url = mode ? `${base}/top10?mode=${encodeURIComponent(mode)}&${bust}` : `${base}/top10?${bust}`;
-  const res = await fetch(url, { cache:'no-store', headers: { 'Cache-Control': 'no-cache' } });
+  const res = await fetch(url, { cache:'no-store' });
   const data = await res.json();
   if(mode){ return Array.isArray(data.list)? data.list : []; }
   return { solo: Array.isArray(data.solo)?data.solo:[], multi: Array.isArray(data.multi)?data.multi:[] };

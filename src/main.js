@@ -49,25 +49,36 @@ function rotateCW(m){
 // - En développement: fallback vers localhost:8787
 function getServerOrigin(){
   try{
-    const cfg = (import.meta && import.meta.env && import.meta.env.VITE_SERVER_ORIGIN) || '';
-    if(cfg){ return String(cfg).replace(/\/$/,''); }
-  }catch{}
-  return `${location.protocol}//${location.hostname}:8787`;
+    const env = (import.meta && import.meta.env) || {};
+    // 1) Dev: utiliser le proxy Vite (base relative)
+    if(env.DEV){ return ''; }
+    // 2) Config explicite
+    if(env.VITE_SERVER_ORIGIN){ return String(env.VITE_SERVER_ORIGIN).replace(/\/$/,''); }
+    // 3) Production même origine (dist servi par Express)
+    return `${location.protocol}//${location.host}`;
+  }catch{
+    return '';
+  }
 }
-async function apiTop10List(){
+async function apiTop10List(mode){
   try{
   const base = getServerOrigin();
-    const res = await fetch(`${base}/top10`, { cache:'no-store' });
-    const data = await res.json();
-    return Array.isArray(data.list)? data.list : [];
+  const bust = `bust=${Date.now()}`;
+  const url = mode ? `${base}/top10?mode=${encodeURIComponent(mode)}&${bust}` : `${base}/top10?${bust}`;
+  const res = await fetch(url, { cache:'no-store', headers: { 'Cache-Control': 'no-cache' } });
+  const data = await res.json();
+  if(mode){ return Array.isArray(data.list)? data.list : []; }
+  return { solo: Array.isArray(data.solo)?data.solo:[], multi: Array.isArray(data.multi)?data.multi:[] };
   }catch{ return []; }
 }
-async function apiTop10Push(name, score, durationMs){
+async function apiTop10Push(name, score, durationMs, mode){
   try{
-  const base = getServerOrigin();
-  const sc = Math.max(0, Number(score||0));
-  const dur = Math.max(0, Number(durationMs||0));
-  await fetch(`${base}/top10`, { method:'POST', headers:{ 'Content-Type': 'application/json' }, body: JSON.stringify({ name, score: sc, durationMs: dur }) });
+    const base = getServerOrigin();
+    const sc = Math.max(0, Number(score||0));
+    const dur = Math.max(0, Number(durationMs||0));
+    const ln = Math.max(0, Number(linesClearedTotal||0));
+  const body = { name, score: sc, durationMs: dur, lines: ln, mode: mode||'solo' };
+  await fetch(`${base}/top10`, { method:'POST', headers:{ 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   }catch{}
 }
 
@@ -165,6 +176,14 @@ const mpLeaveBtn = document.getElementById('btn-mp-leave');
 const roomsJoin = document.getElementById('rooms-join');
 const playersJoin = document.getElementById('players-join');
 const roomsSummary = document.getElementById('rooms-summary');
+// Nouveaux compteurs stylés dans le résumé
+const rsTotal = document.getElementById('rs-total');
+const rsPlayers = document.getElementById('rs-players');
+const rsBattle = document.getElementById('rs-battle');
+// Compteurs sur le héro (panneau résumé)
+const hsTotal = document.getElementById('hs-total');
+const hsPlayers = document.getElementById('hs-players');
+const hsBattle = document.getElementById('hs-battle');
 // Compat: certains rendus référencent encore joinTitle; fournir un fallback neutre
 let joinTitle = document.getElementById('join-title');
 if(!joinTitle){
@@ -206,8 +225,8 @@ const toastEl = document.getElementById('toast');
 const panelMP = document.getElementById('panel-mp');
 
 const fx = new AudioFX();
-// Précharger toutes les pistes audio (MP3/SFX) dès le chargement
-try{ fx.preloadAll?.(); }catch{}
+// Ne pas précharger ni démarrer l'audio avant un geste utilisateur (réduit les warnings autoplay)
+// On déclenchera preloadAll() au premier geste (cf. init() -> unlock).
 
 // Etat jeu
 let grid, active, nextPiece, x, y, score, level, speedMs, dropTimer, running=false, paused=false;
@@ -226,6 +245,8 @@ let wsConnecting = false;
 // Easy Mode state
 let easyMode = false; // activé via toggle UI
 let hint = null; // { x, rot, yLanding, score }
+// Profil IA (influence les poids de l'heuristique Easy)
+let aiProfile = 'equilibre'; // 'conservateur' | 'equilibre' | 'agressif'
 // Multijoueur: état client
 let ws = null;
 let roomId = null;
@@ -259,6 +280,8 @@ const V_ARR = 35; // ms
 let gameStartAt = 0;
 // Effet visuel de rotation (arcs lumineux plus lents et centrés sur le centre de gravité)
 let rotFxStart = 0; const rotFxDur = 280; // ms
+// Effet d'apparition (fade/zoom) à chaque spawn
+let spawnFxStart = 0; const spawnFxDur = 220; // ms
 // Compteur de départ piloté par le serveur
 let serverCountdownActive = false;
 let serverCountdownStart = 0;
@@ -276,6 +299,8 @@ let oppStressCount = 0;
 // Invite toast guard pour le bouton Prêt (éviter le spam)
 let inviteToastShown = false;
 let _toastTO = null;
+// Rejouer: préserver Easy pour la toute prochaine partie uniquement
+let nextStartPreserveEasy = false;
 
 function resetGrid(){
   grid = Array.from({length:ROWS},()=>Array(COLS).fill(null));
@@ -297,6 +322,8 @@ function spawn(){
   active = nextQueue.shift();
   nextQueue.push(nextFromBag());
   x = 3; y = 0;
+  // démarrer l'effet d'apparition
+  spawnFxStart = performance.now();
   if (collide(x,y,active.mat)) {
     gameOver();
   }
@@ -352,8 +379,6 @@ function lock(){
   }
   ensureMusicMode();
   spawn();
-  // après spawn on calcule un nouveau hint
-  computeHint();
 }
 
 function clearLines(){
@@ -396,7 +421,6 @@ function rotate(){
       x += dx; y += dy; active.mat = rot;
       fx.rotate();
       rotFxStart = performance.now();
-      computeHint();
       broadcastState();
       return;
     }
@@ -407,8 +431,6 @@ function rotate(){
 function move(dx){
   if(!collide(x+dx,y,active.mat)){
   x+=dx;
-    // mise à jour hint
-    computeHint();
   broadcastState();
   }
 }
@@ -500,10 +522,17 @@ function draw(){
       drawCell(c,r,COLORS[k]);
     }
   }
-  // pièce active
+  // pièce active (avec effet d'apparition au spawn)
   if(!(roomId && !mpStarted)){
-    for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(active.mat[j][i]){
-      drawCell(x+i,y+j,COLORS[active.key], true);
+    const now = performance.now();
+    const spElapsed = now - (spawnFxStart||0);
+    const showSpawn = spElapsed >= 0 && spElapsed < spawnFxDur;
+    if(showSpawn){
+      drawActiveWithSpawnFX(spElapsed / spawnFxDur);
+    } else {
+      for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(active.mat[j][i]){
+        drawCell(x+i,y+j,COLORS[active.key], true);
+      }
     }
   }
 
@@ -572,6 +601,26 @@ function draw(){
   if(oppCtx){ drawOpponent(); }
   // Miniatures (mobile)
   try{ if(oppMiniCtx){ drawOppMini(); } }catch{}
+}
+
+// Dessine la pièce active avec un petit zoom et un fade-in (t in 0..1)
+function drawActiveWithSpawnFX(t){
+  const ease = (u)=> u<0?0 : u>1?1 : (1 - Math.pow(1-u, 2)); // ease-out quad
+  const k = ease(t);
+  const scale = 1.12 - 0.12 * k; // 1.12 -> 1.00
+  const alpha = 0.10 + 0.90 * k; // 0.10 -> 1.00
+  const { l,t:top,r,b } = getActiveBounds();
+  const cx = (l + r) / 2;
+  const cy = (top + b) / 2;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.translate(-cx, -cy);
+  ctx.globalAlpha = alpha;
+  for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(active.mat[j][i]){
+    drawCell(x+i, y+j, COLORS[active.key], true);
+  }
+  ctx.restore();
 }
 
 function drawCell(cx,cy,color,glow=false){
@@ -822,16 +871,22 @@ function updateScoreLabels(){
 
 function renderTop10(){
   if(!elTop10) return;
+  elTop10.classList.add('top10');
+  elTop10.classList.add('neon');
   elTop10.innerHTML = '';
-    apiTop10List().then((list) => {
-    elTop10.innerHTML = '';
-    list.slice(0,10).forEach((e,i)=>{
-      const li = document.createElement('li');
-  const dur = formatDur(e.durationMs);
-  li.textContent = `${i+1}. ${e.name} — ${e.score}${dur?` (${dur})`:''}`;
-      elTop10.appendChild(li);
-    });
-  });
+    apiTop10List('solo').then(async (list) => {
+        const top10List = list.slice(0,10).map((e,i)=> {
+          const date = e.ts ? new Date(e.ts) : null;
+          const dateTxt = date ? date.toLocaleDateString() : '';
+          const scoreTxt = Number(e.score || 0).toLocaleString('fr-FR');
+          const durTxt = formatDur(e.durationMs);
+          const hasLines = Object.prototype.hasOwnProperty.call(e, 'lines');
+          const linesTxt = hasLines ? Number(e.lines||0) : null;
+          return `<li class="${i < 3 ? 'prime' : ''}"><div class="line"><span class="nm">${escapeHtml(e.name || 'Joueur')}</span><span class="dots"></span><span class="sc">${scoreTxt}${linesTxt!==null ? ` • ${linesTxt}L` : ''}${durTxt ? ` • ${durTxt}` : ''}</span></div>${dateTxt ? `<div class=\"sub\">${dateTxt}</div>` : ''}</li>`;
+        }).join('');
+        elTop10.innerHTML = top10List;
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for 1 second before resolving
+    }).catch(err => console.error(err));
 }
 
 function gameOver(){
@@ -846,13 +901,14 @@ function gameOver(){
   // En solo: ne plus afficher la modale Game Over; le bouton "Nouvelle partie" suffit
   try{
     const dur = Math.max(0, Math.floor((performance.now() - (gameStartAt||performance.now()))));
-    if(playerName) apiTop10Push(playerName, score, dur);
-  }catch{ if(playerName) apiTop10Push(playerName, score); }
+    // Enregistrer le score côté client uniquement en solo; en multi, le serveur l'enregistrera après matchover
+    if(!roomId && playerName) apiTop10Push(playerName, score, dur, 'solo');
+  }catch{}
   fx.gameOverJingle();
   // notifier le serveur
   mpSend({type:'gameover'});
   // rafraîchir les statuts (Moi: Perdu, Adversaire: Gagnant)
-  renderPlayersList();
+    renderPlayersList(); // Refresh player list after game over
 }
 
 function askName(){
@@ -880,6 +936,57 @@ function start(){
   score = 0; level = 1; speedMs = START_SPEED_MS; lastSpeedup = 0; step.last = 0;
   selfDead = false; opponentDead = false; opponentActive = null;
   gameStartAt = performance.now();
+  // Easy mode policy: OFF par défaut à chaque nouvelle partie,
+  // sauf si on vient de cliquer "Rejouer" (préservation 1 coup)
+  try{
+    const easyBtnEl = document.getElementById('easy-btn');
+    const aiDD = document.getElementById('ai-dd');
+    if(!nextStartPreserveEasy){
+      easyMode = false; hint = null;
+      // UI bouton
+      if(easyBtnEl){
+        easyBtnEl.setAttribute('aria-pressed','false');
+        easyBtnEl.classList.remove('active','easy-conservateur','easy-equilibre','easy-agressif');
+      }
+      // Menu: cocher Off par défaut
+      if(aiDD){
+        aiDD.querySelectorAll('.ai-opt').forEach(b=>{
+          const v = b.getAttribute('data-value');
+          b.setAttribute('aria-checked', v==='off' ? 'true' : 'false');
+        });
+      }
+    }
+  }catch{}
+  nextStartPreserveEasy = false;
+  // Règle solo: Easy désactivé, sauf si le joueur s'appelle "kham" (alors l'activer)
+  try{
+    if(!roomId){
+      const isKham = (playerName||'').trim().toLowerCase() === 'kham';
+      const easyBtnEl = document.getElementById('easy-btn');
+      const aiDD = document.getElementById('ai-dd');
+      if(isKham){
+        easyMode = true;
+        if(!aiProfile) aiProfile = 'equilibre';
+        // Synchroniser l'UI bouton
+        if(easyBtnEl){
+          easyBtnEl.setAttribute('aria-pressed','true');
+          easyBtnEl.classList.add('active');
+          easyBtnEl.classList.remove('easy-prudent','easy-conservateur','easy-equilibre','easy-agressif');
+          if(aiProfile==='prudent') easyBtnEl.classList.add('easy-prudent');
+          else if(aiProfile==='conservateur') easyBtnEl.classList.add('easy-conservateur');
+          else if(aiProfile==='agressif') easyBtnEl.classList.add('easy-agressif');
+          else easyBtnEl.classList.add('easy-equilibre');
+        }
+        // Menu: cocher le profil courant (par défaut équilibré)
+        if(aiDD){
+          aiDD.querySelectorAll('.ai-opt').forEach(b=>{
+            const v = b.getAttribute('data-value');
+            b.setAttribute('aria-checked', v===aiProfile ? 'true' : 'false');
+          });
+        }
+      }
+    }
+  }catch{}
   resetGrid(); nextQueue = []; bag = [];
   // préparer l’aperçu mais ne pas afficher d’actif si en multi avant start
   if(roomId){
@@ -887,7 +994,7 @@ function start(){
     if(nextQueue.length<2){ while(nextQueue.length<2){ nextQueue.push(nextFromBag()); } }
     drawNext();
   } else {
-    spawn();
+  nextStartPreserveEasy = false; spawn();
   }
   updateHUD(); renderTop10();
   // Nettoyer effets/overlays résiduels
@@ -1097,28 +1204,131 @@ document.getElementById('btn-new').addEventListener('click', async ()=>{
   // Solo
   try{ dlgGameOver && dlgGameOver.close(); }catch{}
   try{ dlgResult && dlgResult.close(); }catch{}
+  nextStartPreserveEasy = false;
   start();
 });
 
 // bouton pause retiré de l'UI
 
-document.getElementById('btn-leaderboard').addEventListener('click', ()=>{
-  if(dlgTop10 && top10ModalList){
-    top10ModalList.innerHTML = '';
-    apiTop10List().then((list)=>{
-      top10ModalList.innerHTML = '';
+document.getElementById('btn-leaderboard').addEventListener('click', async ()=>{
+  // Toujours utiliser la modale héro (unifiée) pour l’affichage du Top 10 avec onglets Solo/Multi
+  const dlgTopHero = document.getElementById('dlg-top10-hero');
+  const ulHeroSolo = document.getElementById('top10-hero-list-solo');
+  const ulHeroMulti = document.getElementById('top10-hero-list-multi');
+  const tabHeroSolo = document.getElementById('tab-hero-solo');
+  const tabHeroMulti = document.getElementById('tab-hero-multi');
+  const paneHeroSolo = document.getElementById('hero-top10-solo');
+  const paneHeroMulti = document.getElementById('hero-top10-multi');
+  if(dlgTopHero && ulHeroSolo && ulHeroMulti){
+    const renderList = (ul, list)=>{
+      ul.innerHTML = '';
+      if(!Array.isArray(list) || list.length === 0){
+        const li = document.createElement('li');
+        li.className = 'empty';
+        li.textContent = 'Pas de résultat';
+        ul.appendChild(li);
+        return;
+      }
       list.slice(0,10).forEach((e,i)=>{
         const li = document.createElement('li');
-        li.textContent = `${i+1}. ${e.name} — ${e.score}`;
-        top10ModalList.appendChild(li);
+        const date = e.ts ? new Date(e.ts) : null;
+        const dateTxt = date ? date.toLocaleDateString() : '';
+        const scoreTxt = Number(e.score||0).toLocaleString('fr-FR');
+        const durTxt = formatDur(e.durationMs);
+        const hasLines = Object.prototype.hasOwnProperty.call(e, 'lines');
+        const linesTxt = hasLines ? Number(e.lines||0) : null;
+        li.className = i<3 ? 'prime' : '';
+        li.innerHTML = `<div class="line"><span class="nm">${escapeHtml(e.name||'Joueur')}</span><span class="dots"></span><span class="sc">${scoreTxt}${linesTxt!==null?` • ${linesTxt}L`:''}${durTxt?` • ${durTxt}`:''}</span></div>${dateTxt?`<div class=\"sub\">${dateTxt}</div>`:''}`;
+        ul.appendChild(li);
       });
-    });
-    dlgTop10.showModal();
-  } else {
-    renderTop10();
+    };
+    try{
+      const [solo, multi] = await Promise.all([apiTop10List('solo'), apiTop10List('multi')]);
+      renderList(ulHeroSolo, solo);
+      renderList(ulHeroMulti, multi);
+    }catch(err){
+      console.error('Erreur chargement Top 10:', err);
+      renderList(ulHeroSolo, []);
+      renderList(ulHeroMulti, []);
+    }
+    const selectTab = (mode)=>{
+      const soloOn = mode==='solo';
+      tabHeroSolo?.classList.toggle('active', soloOn);
+      tabHeroMulti?.classList.toggle('active', !soloOn);
+      tabHeroSolo?.setAttribute('aria-selected', soloOn?'true':'false');
+      tabHeroMulti?.setAttribute('aria-selected', soloOn?'false':'true');
+      if(paneHeroSolo) paneHeroSolo.hidden = !soloOn;
+      if(paneHeroMulti) paneHeroMulti.hidden = soloOn;
+    };
+    tabHeroSolo?.addEventListener('click', ()=> selectTab('solo'));
+    tabHeroMulti?.addEventListener('click', ()=> selectTab('multi'));
+    selectTab('solo');
+    dlgTopHero.showModal();
+    return;
   }
+  // Fallback: modale simple avec onglets
+  const dlg = document.getElementById('dlg-top10');
+  const tabSolo = document.getElementById('tab-top-solo');
+  const tabMulti = document.getElementById('tab-top-multi');
+  const paneSolo = document.getElementById('top10-solo');
+  const paneMulti = document.getElementById('top10-multi');
+  const ulSolo = document.getElementById('top10-modal-solo');
+  const ulMulti = document.getElementById('top10-modal-multi');
+  if(dlg && tabSolo && tabMulti && paneSolo && paneMulti && ulSolo && ulMulti){
+    const renderList = (ul, list)=>{
+      ul.innerHTML = '';
+      if(!Array.isArray(list) || list.length === 0){
+        const li = document.createElement('li');
+        li.className = 'empty';
+        li.textContent = 'Pas de résultat';
+        ul.appendChild(li);
+        return;
+      }
+      list.slice(0,10).forEach((e,i)=>{
+        const li = document.createElement('li');
+        const date = e.ts ? new Date(e.ts) : null;
+        const dateTxt = date ? date.toLocaleDateString() : '';
+        const scoreTxt = Number(e.score||0).toLocaleString('fr-FR');
+        const durTxt = formatDur(e.durationMs);
+        const hasLines = Object.prototype.hasOwnProperty.call(e, 'lines');
+        const linesTxt = hasLines ? Number(e.lines||0) : null;
+        li.className = i<3 ? 'prime' : '';
+        li.innerHTML = `<div class="line"><span class="nm">${escapeHtml(e.name||'Joueur')}</span><span class="dots"></span><span class="sc">${scoreTxt}${linesTxt!==null?` • ${linesTxt}L`:''}${durTxt?` • ${durTxt}`:''}</span></div>${dateTxt?`<div class=\"sub\">${dateTxt}</div>`:''}`;
+        ul.appendChild(li);
+      });
+    };
+    try{
+      const [solo, multi] = await Promise.all([apiTop10List('solo'), apiTop10List('multi')]);
+      renderList(ulSolo, solo);
+      renderList(ulMulti, multi);
+    }catch(err){
+      console.error('Erreur chargement Top 10:', err);
+      renderList(ulSolo, []);
+      renderList(ulMulti, []);
+    }
+    const selectTab = (mode)=>{
+      const soloOn = mode==='solo';
+      tabSolo?.classList.toggle('active', soloOn);
+      tabMulti?.classList.toggle('active', !soloOn);
+      tabSolo?.setAttribute('aria-selected', soloOn?'true':'false');
+      tabMulti?.setAttribute('aria-selected', soloOn?'false':'true');
+      paneSolo.hidden = !soloOn;
+      paneMulti.hidden = soloOn;
+    };
+    tabSolo.addEventListener('click', ()=> selectTab('solo'));
+    tabMulti.addEventListener('click', ()=> selectTab('multi'));
+    selectTab('solo');
+    dlg.showModal();
+    return;
+  }
+  // Sinon, petit fallback legacy
+  renderTop10();
 });
 if(top10Close){ top10Close.addEventListener('click', ()=> dlgTop10.close()); }
+try{
+  const top10CloseX = document.getElementById('top10-close-x');
+  if(top10CloseX && dlgTop10){ top10CloseX.addEventListener('click', ()=> dlgTop10.close()); }
+}catch{}
   // Aide
   try{
     const btnHelp = document.getElementById('btn-help');
@@ -1128,7 +1338,7 @@ if(top10Close){ top10Close.addEventListener('click', ()=> dlgTop10.close()); }
     if(helpClose && dlgHelp){ helpClose.addEventListener('click', ()=> dlgHelp.close()); }
   }catch{}
 
-goNew.addEventListener('click', ()=>{ dlgGameOver.close(); start(); });
+goNew.addEventListener('click', ()=>{ dlgGameOver.close(); nextStartPreserveEasy = false; start(); });
 
 goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paused=false; fx.stopMusic(); showStart(); });
 
@@ -1146,34 +1356,96 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
   renderTop10();
   // Toggle Mode Easy via bouton (plus de checkbox)
   const easyBtn = document.getElementById('easy-btn');
-  if(easyBtn){
-    easyMode = false; // OFF par défaut
-    const sync = ()=>{ easyBtn.setAttribute('aria-pressed', easyMode ? 'true' : 'false'); easyBtn.classList.toggle('active', !!easyMode); computeHint(); };
-    sync();
-    easyBtn.addEventListener('click', ()=>{ easyMode = !easyMode; sync(); });
+  const aiDD = document.getElementById('ai-dd');
+  if(easyBtn && aiDD){
+  // OFF par défaut
+  easyMode = false;
+  aiProfile = 'equilibre';
+  const syncEasy = ()=>{
+      easyBtn.setAttribute('aria-pressed', easyMode ? 'true' : 'false');
+      easyBtn.classList.toggle('active', !!easyMode);
+      // Couleur par profil
+      easyBtn.classList.remove('easy-prudent','easy-conservateur','easy-equilibre','easy-agressif');
+      if(easyMode){
+        if(aiProfile==='prudent') easyBtn.classList.add('easy-prudent');
+        else if(aiProfile==='conservateur') easyBtn.classList.add('easy-conservateur');
+        else if(aiProfile==='agressif') easyBtn.classList.add('easy-agressif');
+        else easyBtn.classList.add('easy-equilibre');
+      }
+    };
+    syncEasy();
+  const openDD = ()=>{ aiDD.classList.remove('hidden'); easyBtn.setAttribute('aria-expanded','true'); positionDropdown(); };
+    const closeDD = ()=>{ aiDD.classList.add('hidden'); easyBtn.setAttribute('aria-expanded','false'); };
+    let ddOpen = false;
+  function positionDropdown(){
+      try{
+        const r = easyBtn.getBoundingClientRect();
+        // Offset parent = .topbar (position:relative)
+        const topbar = document.querySelector('.topbar');
+        const pr = topbar ? topbar.getBoundingClientRect() : { left:0, top:0 };
+        // Mesurer la largeur du menu (le rendre visible si nécessaire le temps du calcul)
+        const wasHidden = aiDD.classList.contains('hidden');
+        if(wasHidden){ aiDD.style.visibility = 'hidden'; aiDD.classList.remove('hidden'); }
+        const menuW = aiDD.offsetWidth;
+        if(wasHidden){ aiDD.classList.add('hidden'); aiDD.style.visibility = ''; }
+        // Coller au bouton: aligner la droite du menu à la droite du bouton
+        let left = Math.round(r.right - pr.left - menuW);
+        const maxLeft = Math.max(0, Math.floor((pr.left + (topbar?.clientWidth||window.innerWidth)) - pr.left - menuW - 8));
+        if(left < 8) left = 8;
+        if(left > maxLeft) left = maxLeft;
+        aiDD.style.left = left + 'px';
+        // Coller au bas du bouton (sans marge)
+        const top = Math.round(r.bottom - pr.top);
+        aiDD.style.top = top + 'px';
+      }catch{}
+    }
+    easyBtn.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      ddOpen = !ddOpen; if(ddOpen){ openDD(); } else { closeDD(); }
+    });
+    document.addEventListener('click', (e)=>{ if(aiDD.classList.contains('hidden')) return; if(!aiDD.contains(e.target) && e.target!==easyBtn){ ddOpen=false; closeDD(); } });
+    document.addEventListener('keydown', (e)=>{ if(e.key==='Escape'){ ddOpen=false; closeDD(); }});
+    // Sélection d'option
+    aiDD.addEventListener('click', (ev)=>{
+      const btn = ev.target && ev.target.closest('.ai-opt'); if(!btn) return;
+      const val = btn.getAttribute('data-value');
+      // mettre à jour les checks
+      aiDD.querySelectorAll('.ai-opt').forEach(b=> b.setAttribute('aria-checked', b===btn ? 'true' : 'false'));
+      if(val==='off'){
+        if(easyMode){ easyMode=false; syncEasy(); hint=null; }
+      } else {
+        const newProfile = val || 'equilibre';
+        const profileChanged = (newProfile !== aiProfile);
+        aiProfile = newProfile;
+        if(!easyMode){ easyMode = true; syncEasy(); computeHint(); }
+        else if(profileChanged){ syncEasy(); computeHint(); }
+      }
+      ddOpen=false; closeDD();
+    });
+  const repositionIfOpen = ()=>{ if(!aiDD.classList.contains('hidden')) positionDropdown(); };
+  window.addEventListener('resize', repositionIfOpen);
+  window.addEventListener('scroll', repositionIfOpen, { passive:true });
+  if(window.visualViewport){ window.visualViewport.addEventListener('resize', repositionIfOpen); window.visualViewport.addEventListener('scroll', repositionIfOpen); }
   }
   // Navigation écrans
-  if(btnStartSolo){ btnStartSolo.addEventListener('click', (e)=>{ try{ e.stopPropagation(); }catch{} showGame(); start(); }); }
+  if(btnStartSolo){ btnStartSolo.addEventListener('click', (e)=>{ try{ e.stopPropagation(); }catch{} nextStartPreserveEasy = false; showGame(); start(); }); }
   if(btnStartMulti){ btnStartMulti.addEventListener('click', (e)=>{ try{ e.stopPropagation(); }catch{} showJoin(); }); }
   // Déverrouillage audio au premier geste (autoplay policy)
   try{
-    const unlock = ()=>{ try{ fx.resume(); fx.playHomeIntroMusic(); }catch{} window.removeEventListener('pointerdown', unlock); window.removeEventListener('keydown', unlock); };
+  const unlock = ()=>{ try{ fx.resume(); fx.preloadAll?.(); fx.playHomeIntroMusic(); }catch{} window.removeEventListener('pointerdown', unlock); window.removeEventListener('keydown', unlock); };
     window.addEventListener('pointerdown', unlock, { once:true });
     window.addEventListener('keydown', unlock, { once:true });
   }catch{}
   // Délégation sur le conteneur héros (sécurité si certains listeners tombent)
   try{
     const heroContent = document.querySelector('.hero-content');
-    if(heroContent){
+  if(heroContent){
       heroContent.addEventListener('click', (ev)=>{
         const btn = ev.target && (ev.target.closest && ev.target.closest('button'));
         if(!btn) return;
-  if(btn.id === 'btn-start-solo'){ showGame(); start(); }
+  if(btn.id === 'btn-start-solo'){ nextStartPreserveEasy = false; showGame(); start(); }
   else if(btn.id === 'btn-start-multi'){ showJoin(); }
-        else if(btn.id === 'btn-hero-top10'){
-          const b = document.getElementById('btn-hero-top10');
-          if(b){ b.click(); }
-        }
+    // ne pas relayer btn-hero-top10 ici pour éviter un double déclenchement
       });
     }
   }catch{}
@@ -1200,29 +1472,68 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
       hero.addEventListener('pointerleave', ()=>{ hero.style.removeProperty('--px'); hero.style.removeProperty('--py'); });
     }
   }catch{}
-  const btnTopHero = document.getElementById('btn-hero-top10');
-  const dlgTopHero = document.getElementById('dlg-top10-hero');
-  const topHeroList = document.getElementById('top10-hero-list');
-  const topHeroClose = document.getElementById('top10-hero-close');
-  if(btnTopHero && dlgTopHero && topHeroList){
-    btnTopHero.addEventListener('click', async ()=>{
-      topHeroList.innerHTML = '';
-      const list = await apiTop10List();
-      list.slice(0,10).forEach((e,i)=>{
-        const li = document.createElement('li');
-        const date = e.ts ? new Date(e.ts) : null;
-        const dateTxt = date ? date.toLocaleDateString() : '';
-        const scoreTxt = Number(e.score||0).toLocaleString('fr-FR');
-  const durTxt = formatDur(e.durationMs);
-        li.className = i<3 ? 'prime' : '';
-  // nom … score (avec liseré points), durée et date en dessous
-  li.innerHTML = `<div class="line"><span class="nm">${escapeHtml(e.name||'Joueur')}</span><span class="dots"></span><span class="sc">${scoreTxt}${durTxt?` • ${durTxt}`:''}</span></div>${dateTxt?`<div class="sub">${dateTxt}</div>`:''}`;
-        topHeroList.appendChild(li);
+  // Bouton Top10 (héros): ouvre la modale stylée et charge Solo/Multi
+  try{
+    const heroTopBtn = document.getElementById('btn-hero-top10');
+    const dlgTopHero = document.getElementById('dlg-top10-hero');
+    const ulHeroSolo = document.getElementById('top10-hero-list-solo');
+    const ulHeroMulti = document.getElementById('top10-hero-list-multi');
+    const tabHeroSolo = document.getElementById('tab-hero-solo');
+    const tabHeroMulti = document.getElementById('tab-hero-multi');
+    const paneHeroSolo = document.getElementById('hero-top10-solo');
+    const paneHeroMulti = document.getElementById('hero-top10-multi');
+    const btnHeroClose = document.getElementById('top10-hero-close');
+    if(heroTopBtn && dlgTopHero){
+      const renderList = (ul, list)=>{
+        if(!ul) return;
+        ul.innerHTML = '';
+        if(!Array.isArray(list) || list.length===0){
+          const li = document.createElement('li');
+          li.className = 'empty';
+          li.textContent = 'Pas de résultat';
+          ul.appendChild(li);
+          return;
+        }
+        list.slice(0,10).forEach((e,i)=>{
+          const li = document.createElement('li');
+          const date = e.ts ? new Date(e.ts) : null;
+          const dateTxt = date ? date.toLocaleDateString() : '';
+          const scoreTxt = Number(e.score||0).toLocaleString('fr-FR');
+          const durTxt = formatDur(e.durationMs);
+          const hasLines = Object.prototype.hasOwnProperty.call(e, 'lines');
+          const linesTxt = hasLines ? Number(e.lines||0) : null;
+          li.className = i<3 ? 'prime' : '';
+          li.innerHTML = `<div class="line"><span class="nm">${escapeHtml(e.name||'Joueur')}</span><span class="dots"></span><span class="sc">${scoreTxt}${linesTxt!==null?` • ${linesTxt}L`:''}${durTxt?` • ${durTxt}`:''}</span></div>${dateTxt?`<div class=\"sub\">${dateTxt}</div>`:''}`;
+          ul.appendChild(li);
+        });
+      };
+      const selectTab = (mode)=>{
+        const soloOn = mode==='solo';
+        tabHeroSolo?.classList.toggle('active', soloOn);
+        tabHeroMulti?.classList.toggle('active', !soloOn);
+        tabHeroSolo?.setAttribute('aria-selected', soloOn?'true':'false');
+        tabHeroMulti?.setAttribute('aria-selected', soloOn?'false':'true');
+        if(paneHeroSolo) paneHeroSolo.hidden = !soloOn;
+        if(paneHeroMulti) paneHeroMulti.hidden = soloOn;
+      };
+      heroTopBtn.addEventListener('click', async ()=>{
+        try{
+          const [solo, multi] = await Promise.all([apiTop10List('solo'), apiTop10List('multi')]);
+          renderList(ulHeroSolo, solo);
+          renderList(ulHeroMulti, multi);
+        }catch(err){
+          console.error('Erreur chargement Top 10 (héro):', err);
+          renderList(ulHeroSolo, []);
+          renderList(ulHeroMulti, []);
+        }
+        selectTab('solo');
+        dlgTopHero.showModal();
       });
-      dlgTopHero.showModal();
-    });
-  }
-  if(topHeroClose && dlgTopHero){ topHeroClose.addEventListener('click', ()=> dlgTopHero.close()); }
+      tabHeroSolo?.addEventListener('click', ()=> selectTab('solo'));
+      tabHeroMulti?.addEventListener('click', ()=> selectTab('multi'));
+      btnHeroClose?.addEventListener('click', ()=> dlgTopHero.close());
+    }
+  }catch{}
   if(btnJoinCreate){ btnJoinCreate.addEventListener('click', ()=>{ createRoom(); /* basculera vers le jeu à 'joined' */ }); }
   // bouton Rafraîchir retiré (plus de binding nécessaire)
   if(btnJoinBack){ btnJoinBack.addEventListener('click', ()=> showStart()); }
@@ -1251,6 +1562,8 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
   if(resReplay){
     resReplay.addEventListener('click', ()=>{
       dlgResult.close();
+  // Marquer la prochaine partie comme un "rejouer" (préserve l'état Easy)
+  nextStartPreserveEasy = true;
       if(roomId){
         // reset visuel immédiat en attente du compte à rebours
         mpStarted = false; selfDead = false; opponentDead = false; opponentActive = null;
@@ -1568,8 +1881,8 @@ async function createRoom(){
   const randomName = 'Partie-' + Math.random().toString(36).slice(2,6).toUpperCase();
   let myTop = 0;
   try{
-    const list = await apiTop10List();
-    myTop = (list||[]).filter(e=> e.name === playerName).map(e=> e.score).sort((a,b)=>b-a)[0] || 0;
+    const list = await apiTop10List('solo');
+    myTop = (Array.isArray(list)?list:[]).filter(e=> e.name === playerName).map(e=> e.score).sort((a,b)=>b-a)[0] || 0;
   }catch{}
   try{ ws.send(JSON.stringify({type:'create', name: randomName, ownerName: playerName||'Player', ownerTop: myTop })); }catch{}
   // Rester sur l’écran courant: on basculera vers le jeu à la réception de 'joined'
@@ -1626,7 +1939,32 @@ function renderRoomsJoin(rooms){
   // joueurs connectés = tous les joueurs actifs côté serveur, pas seulement dans les parties
   const players = Array.isArray(joinPlayersCache) ? joinPlayersCache.length : 0;
   const inBattle = rooms.reduce((s,r)=> s + (r.started?1:0), 0);
-  if(roomsSummary){ roomsSummary.textContent = `Parties: ${total} • Joueurs connectés: ${players} • Parties en cours: ${inBattle}`; }
+  // Mise à jour du résumé visuel si présent, sinon fallback texte
+  if(rsTotal && rsPlayers && rsBattle){
+    rsTotal.textContent = String(total);
+    rsPlayers.textContent = String(players);
+    rsBattle.textContent = String(inBattle);
+  }else if(roomsSummary){
+    roomsSummary.textContent = `Parties: ${total} • Joueurs connectés: ${players} • Parties en cours: ${inBattle}`;
+  }
+  // Héro: refléter les mêmes chiffres + barres de progression douces
+  try{
+    if(hsTotal) hsTotal.textContent = String(total);
+    if(hsPlayers) hsPlayers.textContent = String(players);
+    if(hsBattle) hsBattle.textContent = String(inBattle);
+    const heroStats = document.querySelector('.hero-stats');
+    if(heroStats){
+      const bars = heroStats.querySelectorAll('.hs-bar>span');
+      const clamp = (v,min,max)=> Math.max(min, Math.min(max, v));
+      const maxRef = Math.max(1, Math.max(total||0, players||0, inBattle||0));
+      const widths = [
+        clamp(((total||0)/maxRef)*100, 4, 100),
+        clamp(((players||0)/maxRef)*100, 4, 100),
+        clamp(((inBattle||0)/maxRef)*100, 4, 100)
+      ];
+      bars.forEach((b,i)=>{ b.style.width = (widths[i]||4) + '%'; });
+    }
+  }catch{}
   // Tri: non pleins d'abord, puis en bataille, puis récents
   const statusRank = (r)=> (r.count<2 ? 0 : (r.started?1:2));
   const sorted = rooms.slice().sort((a,b)=> statusRank(a)-statusRank(b) || (b.lastEndedTs||0)-(a.lastEndedTs||0));
@@ -1798,14 +2136,14 @@ setInterval(()=>{
   // Émettre seulement si une manche est en cours
   if(!mpStarted || !running) return;
   updateScoreLabels();
-  mpSend({type:'state', grid, score, active: active? { key: active.key, mat: active.mat, x, y } : null});
+  mpSend({type:'state', grid, score, lines: linesClearedTotal||0, active: active? { key: active.key, mat: active.mat, x, y } : null});
 }, 250);
 
 function broadcastState(){
   if(!roomId) return;
   // N’envoyer que pendant la partie
   if(!mpStarted || !running) return;
-  mpSend({type:'state', grid, score, active: active? { key: active.key, mat: active.mat, x, y } : null});
+  mpSend({type:'state', grid, score, lines: linesClearedTotal||0, active: active? { key: active.key, mat: active.mat, x, y } : null});
 }
 
 // ------------- Ready/Start/Seeded RNG -------------
@@ -1823,6 +2161,8 @@ function onMatchStart(seedStr){
   seed = seedStr || (Date.now()+':'+Math.random());
   rng = mulberry32(hashSeed(seed));
   mpStarted = true;
+  // Multi: si ce départ n'est pas un "rejouer" explicite, remettre Easy à OFF
+  if(!nextStartPreserveEasy){ try{ const easyBtnEl = document.getElementById('easy-btn'); if(easyBtnEl){ easyBtnEl.setAttribute('aria-pressed','false'); easyBtnEl.classList.remove('active','easy-conservateur','easy-equilibre','easy-agressif'); } const aiDD = document.getElementById('ai-dd'); if(aiDD){ aiDD.querySelectorAll('.ai-opt').forEach(b=>{ const v = b.getAttribute('data-value'); b.setAttribute('aria-checked', v==='off' ? 'true' : 'false'); }); } easyMode=false; hint=null; }catch{} }
   score = 0; opponentScore = 0; elScore && (elScore.textContent='0');
   updateScoreLabels();
   bag = []; nextQueue = [];
@@ -1831,6 +2171,7 @@ function onMatchStart(seedStr){
   // démarrer immédiatement (le serveur a affiché le compte à rebours)
   cancelServerCountdown();
   start();
+  nextStartPreserveEasy = false;
   // conserver l’état "Prêt" affiché durant la manche
   updateReadyBadges();
   updateStartButtonLabel();
@@ -2009,14 +2350,26 @@ function fitBoardToContainer(){
     }
   }
   // Fit to container (mobile):
-  // 1) Largeur réelle du conteneur boards (en mobile: pleine largeur)
+  // 1) Largeur réelle du conteneur boards (en mobile: pleine largeur moins sidebar)
   let availW = (()=>{
     try{
-      const boards = document.querySelector('#app .boards');
-      if(boards && boards.clientWidth) return boards.clientWidth;
       const layout = document.querySelector('#app .layout');
-      if(layout && layout.clientWidth) return layout.clientWidth;
-      return window.innerWidth - 24;
+      const sidebar = document.querySelector('#app .sidebar');
+      let layoutW = layout && layout.clientWidth ? layout.clientWidth : (window.innerWidth - 24);
+      // Estimer largeur sidebar selon breakpoints (voir CSS @media)
+      let sbW = 0;
+      const mq420 = window.matchMedia && window.matchMedia('(max-width: 420px)').matches;
+      const mq600 = window.matchMedia && window.matchMedia('(max-width: 600px)').matches;
+      const mq900 = window.matchMedia && window.matchMedia('(max-width: 900px)').matches;
+      if(sidebar && sidebar.clientWidth){ sbW = sidebar.clientWidth; }
+      else {
+        if(mq420) sbW = Math.min(92, Math.floor(window.innerWidth * 0.25));
+        else if(mq600) sbW = Math.min(100, Math.floor(window.innerWidth * 0.26));
+        else if(mq900) sbW = Math.min(108, Math.floor(window.innerWidth * 0.26));
+        else sbW = 300; // fallback desktop
+      }
+      const gridGap = 8; // gap mobile entre boards et sidebar
+      return Math.max(120, layoutW - sbW - gridGap);
     }catch{ return Math.max(120, window.innerWidth - 24); }
   })();
   // 2) Hauteur visible (précise) = visualViewport.height - topbar - bottombar - petite marge
@@ -2026,12 +2379,12 @@ function fitBoardToContainer(){
     const bottombar = document.querySelector('.bottombar');
     const topH = topbar ? topbar.getBoundingClientRect().height : 0;
     const botH = bottombar ? bottombar.getBoundingClientRect().height : 0;
-    // marge plus serrée pour maximiser la hauteur du plateau
-    vh = Math.max(240, vh - topH - botH - 4);
+  // marge ajustée pour ne pas mordre les bords
+  vh = Math.max(240, vh - topH - botH - 10);
   }catch{}
   // 3) Le canvas est dans .frame (padding 10, bordure ≈ 2) -> extra ≈ 22 px en largeur, 20px en hauteur
   const frameExtraW = 22, frameExtraH = 20;
-  const maxCanvasWByWidth = Math.max(100, Math.floor(availW - frameExtraW));
+  const maxCanvasWByWidth = Math.max(100, Math.floor(availW - frameExtraW - 4));
   const maxCanvasWByHeight = Math.max(100, Math.floor((vh - frameExtraH) / 2)); // ratio 1:2
   const targetCanvasW = Math.max(120, Math.min(maxCanvasWByWidth, maxCanvasWByHeight));
   // 4) Recalcul TILE (entier) à partir de la largeur visée du canvas
@@ -2080,6 +2433,16 @@ function updateOpponentVisibility(){
   // Recalibrer la taille du plateau au basculement solo/multi
   try{ fitBoardToContainer(); draw(); balanceUnderPanelsHeight(); }catch{}
   // miniature en sidebar: visible seulement en multi (gérée par CSS via .solo-mode)
+  // Visibilité du bouton Easy: masqué en solo, sauf si le joueur s'appelle "kham"; visible en multi
+  try{
+    const easyBtn = document.getElementById('easy-btn');
+    if(easyBtn){
+      const isSolo = !roomId;
+      const isKham = (playerName||'').trim().toLowerCase() === 'kham';
+      if(isSolo && !isKham){ easyBtn.style.display = 'none'; }
+      else { easyBtn.style.display = ''; }
+    }
+  }catch{}
 }
 
 // ---------- UI helpers ----------
@@ -2488,41 +2851,107 @@ function computeHint(){
   const pieceKey = active.key;
   let best = null;
   let bestNonClear = null; // meilleure position qui ne clear pas (0 lignes)
+  // Contexte courant pour comparer les deltas
+  const holesBefore = countHoles(grid);
+  const heightBefore = stackHeight(grid);
+  const freeRows = ROWS - heightBefore;
+  const inDanger = freeRows <= 4; // on touche le plafond
+  // second lookahead (2-plies) si dispo
+  const next1 = nextQueue[0] ? nextQueue[0].key : null;
+  const next2 = nextQueue[1] ? nextQueue[1].key : null;
+  // Bag-aware: estimer si un 'I' est imminent dans le sac courant (prochaines 5 pièces env.)
+  const upcomingKeys = [next1, next2].concat(nextQueue.slice(2).map(p=>p.key));
+  const iIndex = upcomingKeys.findIndex(k=> k==='I');
+  const iSoon = iIndex >= 0 && iIndex <= 4; // I attendu dans peu de temps
+  // Préférence de puits à droite si I bientôt là
+  const preferRightWell = iSoon;
   for(let rot=0; rot<4; rot++){
     const mat = rotateN(TETROMINOS[pieceKey], rot);
     // largeur utile
     let minX=4, maxX=0; for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(mat[j][i]){ minX=Math.min(minX,i); maxX=Math.max(maxX,i); }
     for(let px=-minX; px<=COLS-(maxX+1); px++){
       // tomber sur la grille actuelle
-      let py = -2;
-      while(!collide(px, py+1, mat)) py++;
+      let py = -2; while(!collide(px, py+1, mat)) py++;
       if(py < -1) continue;
       const sim = clone(grid);
       placeOn(sim, px, py, mat, pieceKey);
-  const cleared = simulateClear(sim);
-      const h1 = stackHeight(sim);
-  const next1 = nextQueue[0] ? nextQueue[0].key : null;
-  const la = next1 ? bestPlacementScoreForNext(sim, next1) : 0;
-  const clearedBonus = (cleared===3? 60 : cleared*10);
-      const holes = countHoles(sim);
-      const bump = bumpiness(sim);
-  const score = clearedBonus - holes*6 - bump*0.5 - h1*0.2 + la*0.6;
+      const cleared = simulateClear(sim);
+  const h1 = stackHeight(sim);
+  const holes = countHoles(sim);
+  const bump = bumpiness(sim);
+  // Trous collés au bord (c=0 ou c=COLS-1) après ce coup
+  const edgeHoles = countEdgeHoles(sim);
+  // Nouveaux trous créés par ce coup (pénalisés fortement, surtout si posés haut)
+  const newHoles = Math.max(0, holes - holesBefore);
+  // Plus la pose est haute (py petit), plus on pénalise un trou créé
+  const highPoseFactor = 1 + Math.max(0, (16 - Math.max(0, py))) * 0.06; // jusqu'à ~1.96x
+      // score mobilité: combien de placements légaux pour la prochaine pièce (plus = moins de pièges)
+      let mobility = 0;
+      if(next1){ mobility = countLegalPlacements(sim, next1); }
+      // score lookahead 1 et 2
+      const la1 = next1 ? bestPlacementScoreForNext(sim, next1) : 0;
+      let la2 = 0;
+      if(next1 && next2){
+        // estimer la suite: on simule le meilleur placement pour next1 puis évalue next2
+        la2 = bestPlacementScoreWithFollow(sim, next1, next2);
+      }
+      // Bonus potentiel si on bouche un trou existant au coup suivant (heuristique cheap)
+      let fillBonus = 0;
+      if(next1){
+        const beforeHoles = holesBefore;
+        const bestAfterNext = bestPlacementThatReducesHoles(sim, next1, beforeHoles);
+        if(bestAfterNext && bestAfterNext.holesReduced>0){
+          fillBonus = Math.min(10, bestAfterNext.holesReduced * 4);
+        }
+      }
+      // bonus/malus
+      // Poids par profil IA
+      const weights = getAIWeights(aiProfile);
+      // Récompense clears; booster 2 lignes si on est haut
+      let clearedBonus = (cleared>=3 ? weights.clear3Bonus : cleared * weights.clearUnit);
+      if(inDanger && cleared===2){ clearedBonus *= weights.clear2DangerBoost; }
+      // Récompenser la baisse de hauteur (utile quand on est haut)
+      const deltaHeight = h1 - heightBefore; // <0 si on a abaissé la pile globale
+      const dropReward = (deltaHeight < 0 ? (-deltaHeight) * weights.heightDropReward * (inDanger ? 1.4 : 1.0) : 0);
+      const wellPenalty = deepWells(sim) * weights.deepWell;
+      const overhangPenalty = overhangs(sim) * weights.overhang;
+      // Pénalités classiques, avec poids height amplifié en danger
+      let score = clearedBonus + dropReward + fillBonus
+        - holes * weights.holes
+        - bump * weights.bump
+        - h1   * (weights.height * (inDanger ? 1.5 : 1.0))
+        - (newHoles * weights.newHole * highPoseFactor)
+        - edgeHoles * weights.edgeHole
+        - wellPenalty - overhangPenalty
+        + la1  * weights.look1
+        + la2  * weights.look2
+        + mobility * weights.mobility;
+      // Bag-aware bonus/malus: favoriser un puits sur le bord droit si un I arrive bientôt
+      if(preferRightWell){
+        const rightDepth = columnDepthAt(sim, COLS-1);
+        // bonus si bord droit plus bas que voisins (puits ouvert)
+        if(rightDepth >= 2) score += Math.min(12, rightDepth*3);
+        // petite pénalité si on bouche le bord droit (surface remonte fortement)
+        const heightsBefore = columnHeights(grid);
+        const heightsAfter = columnHeights(sim);
+        const deltaRight = heightsAfter[COLS-1] - heightsBefore[COLS-1];
+        if(deltaRight > 0){
+          // Si on clear 2+ lignes, alléger la pénalité pour ne pas refuser un bon move de survie
+          const rightClosePenalty = Math.min(10, deltaRight*2) * (cleared>=2 ? 0.5 : 1.0);
+          score -= rightClosePenalty;
+        }
+      }
       const candidate = { x:px, rot, yLanding:py, score, cleared };
       if(!best || score > best.score){ best = candidate; }
       if(cleared === 0){ if(!bestNonClear || score > bestNonClear.score){ bestNonClear = candidate; } }
     }
   }
-  // Politique Easy: éviter de suggérer une pose qui détruit 1 à 2 lignes, à moins qu'il n'existe aucune bonne alternative.
-  // On autorise si cleared >=3 (attaque) ou si aucune option cleared===0 n'existe avec un score proche.
-  if(best && (best.cleared===1 || best.cleared===2)){
-    if(bestNonClear){
-      // Si la meilleure non-clear est raisonnablement proche, on la préfère.
-      const margin = 15; // tolérance de score
-      if(best.score - bestNonClear.score <= margin){
-        hint = bestNonClear;
-        return;
-      }
-    }
+  // Politique Easy révisée:
+  // - On peut décourager les 1-ligne si alternative non-clear proche ET qu'on n'est pas en danger.
+  // - Ne PAS décourager les 2-lignes (souvent des sauvetages), surtout en hauteur.
+  if(best && best.cleared===1 && bestNonClear && !inDanger){
+    const margin = 20; // tolérance
+    if(best.score - bestNonClear.score <= margin){ hint = bestNonClear; return; }
   }
   hint = best;
 }
@@ -2558,6 +2987,18 @@ function countHoles(sim){
   return holes;
 }
 
+// Compte les trous adjacents au bord (colonne 0 ou 9)
+function countEdgeHoles(sim){
+  let holes=0;
+  for(let c of [0, COLS-1]){
+    let block=false;
+    for(let r=0;r<ROWS;r++){
+      if(sim[r][c]) block=true; else if(block) holes++;
+    }
+  }
+  return holes;
+}
+
 function bumpiness(sim){
   const heights = Array(COLS).fill(0);
   for(let c=0;c<COLS;c++){
@@ -2583,11 +3024,126 @@ function bestPlacementScoreForNext(simGrid, nextKey){
       const holes = countHoles(sim);
       const bump = bumpiness(sim);
   const clearedBonus = (cleared===3? 60 : cleared*10);
-  const sc = clearedBonus - holes*6 - bump*0.5 - h1*0.2;
+  const w = getAIWeights(aiProfile);
+  const sc = clearedBonus - holes*w.holes*0.93 - bump*w.bump*1.0 - h1*w.height*1.0;
       if(sc>best) best=sc;
     }
   }
   return best;
+}
+
+// Cherche un placement de la prochaine pièce qui réduit le nombre de trous
+function bestPlacementThatReducesHoles(simGrid, nextKey, holesBefore){
+  let best=null;
+  for(let rot=0;rot<4;rot++){
+    const mat = rotateN(TETROMINOS[nextKey], rot);
+    let minX=4, maxX=0; for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(mat[j][i]){ minX=Math.min(minX,i); maxX=Math.max(maxX,i); }
+    for(let px=-minX; px<=COLS-(maxX+1); px++){
+      let py=-2; while(!collideGrid(simGrid, px, py+1, mat)) py++;
+      if(py<-1) continue;
+      const sim = clone(simGrid);
+      placeOn(sim, px, py, mat, nextKey);
+      const h = countHoles(sim);
+      const reduced = Math.max(0, holesBefore - h);
+      if(reduced>0){
+        const cand = { holesReduced: reduced };
+        if(!best || cand.holesReduced > best.holesReduced){ best = cand; }
+      }
+    }
+  }
+  return best;
+}
+
+function getAIWeights(profile){
+  switch(profile){
+    case 'prudent':
+      return { holes:9.2, bump:0.7, height:0.28, look1:0.45, look2:0.22, mobility:0.35, deepWell:1.6, overhang:2.6, clear3Bonus:65, clearUnit:2, newHole:12.0, heightDropReward:3.2, clear2DangerBoost:1.5, edgeHole:1.2 };
+    case 'conservateur':
+  return { holes:8.5, bump:0.65, height:0.26, look1:0.5, look2:0.25, mobility:0.35, deepWell:1.4, overhang:2.2, clear3Bonus:70, clearUnit:3, newHole:10.0, heightDropReward:3.5, clear2DangerBoost:1.6, edgeHole:1.0 };
+    case 'agressif':
+  return { holes:6.2, bump:0.5, height:0.18, look1:0.7, look2:0.45, mobility:0.25, deepWell:1.0, overhang:1.6, clear3Bonus:95, clearUnit:7, newHole:7.2, heightDropReward:2.2, clear2DangerBoost:1.3, edgeHole:0.8 };
+    default: // équilibré
+  return { holes:7.2, bump:0.55, height:0.22, look1:0.6, look2:0.35, mobility:0.3, deepWell:1.2, overhang:2.0, clear3Bonus:80, clearUnit:6, newHole:8.5, heightDropReward:2.8, clear2DangerBoost:1.5, edgeHole:0.9 };
+  }
+}
+
+// Lookahead: applique le meilleur placement pour k1, puis évalue k2
+function bestPlacementScoreWithFollow(simGrid, k1, k2){
+  let best=-Infinity;
+  for(let rot=0;rot<4;rot++){
+    const mat = rotateN(TETROMINOS[k1], rot);
+    let minX=4, maxX=0; for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(mat[j][i]){ minX=Math.min(minX,i); maxX=Math.max(maxX,i); }
+    for(let px=-minX; px<=COLS-(maxX+1); px++){
+      let py=-2; while(!collideGrid(simGrid, px, py+1, mat)) py++;
+      if(py<-1) continue;
+      const sim1 = clone(simGrid);
+      placeOn(sim1, px, py, mat, k1);
+      simulateClear(sim1);
+      const sc = bestPlacementScoreForNext(sim1, k2);
+      if(sc>best) best=sc;
+    }
+  }
+  return best;
+}
+
+// Nombre de placements légaux pour éviter les pièges
+function countLegalPlacements(simGrid, key){
+  let count=0;
+  for(let rot=0; rot<4; rot++){
+    const mat = rotateN(TETROMINOS[key], rot);
+    let minX=4, maxX=0; for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(mat[j][i]){ minX=Math.min(minX,i); maxX=Math.max(maxX,i); }
+    for(let px=-minX; px<=COLS-(maxX+1); px++){
+      let py=-2; while(!collideGrid(simGrid, px, py+1, mat)) py++;
+      if(py<-1) continue; count++;
+    }
+  }
+  return count;
+}
+
+// Détecter puits profonds (colonnes nettement plus basses que voisines)
+function deepWells(sim){
+  const h = columnHeights(sim);
+  let wells=0; for(let c=0;c<COLS;c++){
+    const left = c>0 ? h[c-1] : h[c];
+    const right = c<COLS-1 ? h[c+1] : h[c];
+    const depth = Math.max(0, Math.max(left, right) - h[c]);
+    if(depth >= 4) wells += (depth-3); // pénalise surtout puits >=4
+  }
+  return wells;
+}
+
+function overhangs(sim){
+  // cases vides recouvertes par un toit horizontal
+  let count=0;
+  for(let r=0;r<ROWS-1;r++){
+    for(let c=0;c<COLS;c++){
+      if(!sim[r][c] && sim[r+1][c]){
+        // vérifier un toit à c-1..c+1
+        const left = c>0 && sim[r+1][c-1];
+        const right = c<COLS-1 && sim[r+1][c+1];
+        if(left || right) count++;
+      }
+    }
+  }
+  return count*0.5;
+}
+
+function columnHeights(sim){
+  const heights = Array(COLS).fill(ROWS);
+  for(let c=0;c<COLS;c++){
+    for(let r=0;r<ROWS;r++){ if(sim[r][c]){ heights[c]=r; break; } }
+  }
+  return heights.map(r=> ROWS - r);
+}
+
+// Profondeur relative de la colonne c par rapport à ses voisins (puits si négatif)
+function columnDepthAt(sim, c){
+  const h = columnHeights(sim);
+  const here = h[c];
+  const left = c>0 ? h[c-1] : here;
+  const right = c<COLS-1 ? h[c+1] : here;
+  const maxNei = Math.max(left, right);
+  return Math.max(0, maxNei - here);
 }
 
 function collideGrid(simGrid, px, py, mat){

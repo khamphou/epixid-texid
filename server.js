@@ -13,11 +13,23 @@ const wss = new WebSocketServer({ server: httpServer });
 const PORT = process.env.PORT || 8787;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 app.use(express.json());
+// CORS global pour les appels depuis Vite (dev) ou autre origine
+app.use((req, res, next)=>{
+  try{
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  }catch{}
+  if(req.method === 'OPTIONS'){
+    try{ return res.sendStatus(204); }catch{ return; }
+  }
+  next();
+});
 // Track last hello timestamps per cid (simple rate limit)
 const lastHelloByCid = new Map();
 
 // In-memory rooms
-// id -> { id, clients:Set<ws>, ready:Set<ws>, started:boolean, seed:string|null, done:Set<ws>, scores:Map<ws,number>, countdownTimer: NodeJS.Timeout|null }
+// id -> { id, clients:Set<ws>, ready:Set<ws>, started:boolean, seed:string|null, done:Set<ws>, scores:Map<ws,number>, lines:Map<ws,number>, startedAt:number|null, countdownTimer: NodeJS.Timeout|null }
 const rooms = new Map();
 
 function makeId(){
@@ -70,59 +82,148 @@ app.post('/purge', (req,res)=>{
   res.json({ ok: true });
 });
 
-// --- Simple server-side Top 10 cache (persisted to JSON file) ---
+// --- Classements Solo/Multi (persistés en JSON) ---
 const leaderboardPath = path.resolve(__dirname, 'leaderboard.json');
-let leaderboard = [];
+let leaderboardSolo = [];
+let leaderboardMulti = [];
 let leaderboardLock = false; // verrou simple en mémoire
-try{
-  if(fs.existsSync(leaderboardPath)){
+let _lbReloadTimer = null;
+let _lbDirty = false;
+
+function loadLeaderboard(){
+  try{
+    if(!fs.existsSync(leaderboardPath)){
+      leaderboardSolo = [];
+      leaderboardMulti = [];
+      return;
+    }
     const raw = fs.readFileSync(leaderboardPath, 'utf-8');
     const data = JSON.parse(raw);
-    if(Array.isArray(data)) leaderboard = data;
+    if(Array.isArray(data)){
+      // rétro-compat: ancien format = solo seulement
+      leaderboardSolo = data;
+      leaderboardMulti = [];
+    } else if(data && typeof data==='object'){
+      leaderboardSolo = Array.isArray(data.solo) ? data.solo : [];
+      leaderboardMulti = Array.isArray(data.multi) ? data.multi : [];
+    } else {
+      leaderboardSolo = [];
+      leaderboardMulti = [];
+    }
+    _lbDirty = false;
+    try{ console.log('[LB] Reloaded from disk: solo=%d, multi=%d', leaderboardSolo.length, leaderboardMulti.length); }catch{}
+  }catch(err){
+    try{ console.error('[LB] Failed to load leaderboard:', err?.message||err); }catch{}
   }
+}
+function scheduleReloadLeaderboard(){
+  _lbDirty = true;
+  if(_lbReloadTimer){ try{ clearTimeout(_lbReloadTimer); }catch{} _lbReloadTimer = null; }
+  _lbReloadTimer = setTimeout(()=>{ loadLeaderboard(); }, 150);
+}
+// Chargement initial
+loadLeaderboard();
+// Watcher pour recharger à chaque sauvegarde du fichier (détecte change/rename)
+try{
+  fs.watch(leaderboardPath, { persistent:true }, ()=> scheduleReloadLeaderboard());
 }catch{}
-function saveLeaderboard(){ try{ fs.writeFileSync(leaderboardPath, JSON.stringify(leaderboard.slice(0,100)), 'utf-8'); }catch{} }
-function getTop10(){
-  return leaderboard
-  .filter(e=> e && typeof e.score==='number' && e.name)
-  .sort((a,b)=> (b.score||0)-(a.score||0))
+try{
+  const dir = path.dirname(leaderboardPath);
+  fs.watch(dir, { persistent:true }, (eventType, filename)=>{
+    if(String(filename).toLowerCase() === 'leaderboard.json') scheduleReloadLeaderboard();
+  });
+}catch{}
+function saveLeaderboard(){
+  try{
+    const payload = {
+      solo: leaderboardSolo.slice(0,100),
+      multi: leaderboardMulti.slice(0,100),
+    };
+    fs.writeFileSync(leaderboardPath, JSON.stringify(payload), 'utf-8');
+  // Garder la mémoire en phase (et déclencher le watcher si besoin)
+  scheduleReloadLeaderboard();
+  }catch{}
+}
+function getTop10(mode='solo'){
+  const arr = mode==='multi' ? leaderboardMulti : leaderboardSolo;
+  return arr
+    .filter(e=> e && typeof e.score==='number' && e.name)
+    .sort((a,b)=> (b.score||0)-(a.score||0))
     .slice(0,10);
 }
 app.get('/top10', (req,res)=>{
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.json({ list: getTop10() });
-  // log for visibility
-  logTop10('GET /top10');
+  // Désactiver tout cache intermédiaire et navigateur pour refléter immédiatement les nouvelles entrées
+  try{
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+  }catch{}
+  if(_lbDirty){ try{ loadLeaderboard(); }catch{} }
+  const mode = (req.query && String(req.query.mode||'solo'));
+  if(mode==='solo' || mode==='multi'){
+    res.json({ list: getTop10(mode) });
+    logTop10(`GET /top10?mode=${mode}`);
+  } else {
+    // Si pas de mode précisé, renvoyer les deux pour usage futur
+    res.json({ solo: getTop10('solo'), multi: getTop10('multi') });
+    logTop10('GET /top10 (both)');
+  }
 });
 app.post('/top10', (req,res)=>{
   res.setHeader('Access-Control-Allow-Origin', '*');
   const name = (req.body && (req.body.name||'')+'').slice(0,32) || 'Player';
   const score = Number(req.body && req.body.score) || 0;
   const durationMs = Math.max(0, Number(req.body && req.body.durationMs || 0));
+  const lines = Math.max(0, Number(req.body && req.body.lines || 0));
+  const mode = ((req.body && req.body.mode) ? String(req.body.mode) : 'solo');
+  let accepted = false;
   if(Number.isFinite(score) && score>=0){
-    // entrée conditionnelle: uniquement si score dans le Top10
     const doInsert = ()=>{
-      const currentTop = getTop10();
+      const currentTop = getTop10(mode);
       const threshold = currentTop.length<10 ? 0 : (currentTop[9]?.score||0);
-      if(score > threshold){
-        leaderboard.push({ name, score, ts: Date.now(), durationMs });
-        leaderboard = leaderboard.sort((a,b)=> (b.score||0)-(a.score||0)).slice(0,1000);
+      // Règle: si <10 entrées, accepter tout score >= 0; sinon exiger > seuil du 10e
+      const shouldAccept = currentTop.length < 10 ? (score >= 0) : (score > threshold);
+      if(shouldAccept){
+        const entry = { name, score, ts: Date.now(), durationMs, lines };
+        if(mode==='multi') leaderboardMulti.push(entry); else leaderboardSolo.push(entry);
+        // garder une longueur maîtrisée pour le fichier (<=1000)
+        leaderboardSolo = leaderboardSolo.sort((a,b)=> (b.score||0)-(a.score||0)).slice(0,1000);
+        leaderboardMulti = leaderboardMulti.sort((a,b)=> (b.score||0)-(a.score||0)).slice(0,1000);
         saveLeaderboard();
-        logTop10('POST /top10 (accepted)');
+        logTop10(`POST /top10 (accepted, mode=${mode})`);
+        accepted = true;
       } else {
-        // rejet silencieux
-        logTop10('POST /top10 (ignored: below threshold)');
+        logTop10(`POST /top10 (ignored: below threshold, mode=${mode})`);
       }
     };
     if(!leaderboardLock){
       leaderboardLock = true;
       try{ doInsert(); }finally{ leaderboardLock = false; }
     } else {
-      // backoff très court si lock : essayer une fois après 20ms
       setTimeout(()=>{ if(!leaderboardLock){ leaderboardLock=true; try{ doInsert(); }finally{ leaderboardLock=false; } } }, 20);
     }
   }
-  res.json({ ok:true });
+  // Inclure un indicateur accepted pour faciliter le débogage côté client
+  res.json({ ok:true, accepted, mode, score });
+});
+
+// Endpoint de debug: retourner les scores (non tronqués) par mode
+app.get('/scores', (req,res)=>{
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  try{
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+  }catch{}
+  if(_lbDirty){ try{ loadLeaderboard(); }catch{} }
+  const mode = (req.query && String(req.query.mode||''));
+  if(mode==='solo') return res.json({ list: leaderboardSolo.slice().sort((a,b)=> (b.score||0)-(a.score||0)) });
+  if(mode==='multi') return res.json({ list: leaderboardMulti.slice().sort((a,b)=> (b.score||0)-(a.score||0)) });
+  res.json({
+    solo: leaderboardSolo.slice().sort((a,b)=> (b.score||0)-(a.score||0)),
+    multi: leaderboardMulti.slice().sort((a,b)=> (b.score||0)-(a.score||0))
+  });
 });
 
 // Static hosting for built frontend (single server setup)
@@ -189,10 +290,11 @@ function logLobbySnapshot(reason){
 // Log Top 10 helper
 function logTop10(reason){
   try{
-    const list = getTop10();
-    console.log(`[TOP10] ${reason || ''}`);
-    if(!list.length){ console.log('- (vide)'); return; }
-    list.forEach((e, i)=> console.log(`${i+1}. ${e.name} — ${e.score}`));
+  const s = getTop10('solo');
+  const m = getTop10('multi');
+  console.log(`[TOP10] ${reason || ''}`);
+  console.log('- SOLO:'); if(!s.length) console.log('  (vide)'); else s.forEach((e, i)=> console.log(`  ${i+1}. ${e.name} — ${e.score}`));
+  console.log('- MULTI:'); if(!m.length) console.log('  (vide)'); else m.forEach((e, i)=> console.log(`  ${i+1}. ${e.name} — ${e.score}`));
   }catch{}
 }
 
@@ -289,7 +391,7 @@ wss.on('connection', (ws)=>{
         return send(ws, { type:'error', message:'Vous possédez déjà un salon.' });
       }
       const id = makeId();
-      const r = { id, name: (msg.name||null), ownerName: (msg.ownerName||null), ownerTop: Number(msg.ownerTop||0), clients: new Set(), ready: new Set(), started: false, seed: null, done: new Set(), scores: new Map(), owner: ws, ownerAddr: ip||null, ownerPid: ws.pid||null, countdownTimer: null, lastEndedTs: null };
+  const r = { id, name: (msg.name||null), ownerName: (msg.ownerName||null), ownerTop: Number(msg.ownerTop||0), clients: new Set(), ready: new Set(), started: false, seed: null, done: new Set(), scores: new Map(), lines: new Map(), startedAt: null, owner: ws, ownerAddr: ip||null, ownerPid: ws.pid||null, countdownTimer: null, lastEndedTs: null };
       rooms.set(id, r);
       ws.ownsRoomId = id;
       join(ws, id);
@@ -300,7 +402,7 @@ wss.on('connection', (ws)=>{
   for(const c of wss.clients){ try{ c.send(JSON.stringify({ type:'rooms', rooms: roomInfo() })); c.send(JSON.stringify({ type:'players', players: playersInfo() })); }catch{} }
     } else if(type === 'join'){
   const id = msg.room;
-  if(!rooms.has(id)) rooms.set(id, { id, name:null, ownerName:null, ownerTop:0, clients: new Set(), ready:new Set(), started:false, seed:null, done:new Set(), scores:new Map(), owner: null, countdownTimer: null, lastEndedTs: null });
+  if(!rooms.has(id)) rooms.set(id, { id, name:null, ownerName:null, ownerTop:0, clients: new Set(), ready:new Set(), started:false, seed:null, done:new Set(), scores:new Map(), lines:new Map(), startedAt:null, owner: null, countdownTimer: null, lastEndedTs: null });
       join(ws, id);
       // Informer seulement le nouvel entrant des états "ready" existants (ex: hôte prêt par défaut)
       try{
@@ -320,6 +422,9 @@ wss.on('connection', (ws)=>{
       const r = ws.room && rooms.get(ws.room);
       if(r){
         r.scores.set(ws, Number(msg.score||0));
+        if(typeof msg.lines === 'number'){
+          try{ r.lines.set(ws, Math.max(0, Number(msg.lines||0))); }catch{}
+        }
         // synchroniser périodiquement les scores côté clients
         const scoreList = Array.from(r.clients).map(c=>({ id: c.id, name: c.name||null, score: r.scores.get(c)||0 }));
         for(const c of r.clients){ send(c, { type:'scores', list: scoreList }); }
@@ -358,10 +463,12 @@ wss.on('connection', (ws)=>{
             if(r.clients.size === 2 && r.ready.size === 2 && !r.started){
               r.started = true;
               r.seed = makeId()+Date.now();
+              r.startedAt = Date.now();
               r.done.clear();
               r.scores.clear();
+              r.lines.clear?.();
               // initialiser les scores à 0 pour chaque joueur
-              for(const c of r.clients){ r.scores.set(c, 0); }
+              for(const c of r.clients){ r.scores.set(c, 0); try{ r.lines.set(c, 0); }catch{} }
               // notifier un reset des scores
               const initScores = Array.from(r.clients).map(c=>({ id: c.id, name: c.name||null, score: 0 }));
               for(const c of r.clients){ send(c, { type:'scores', list: initScores }); }
@@ -389,9 +496,11 @@ wss.on('connection', (ws)=>{
             if(r.clients.size === 2 && r.ready.size === 2 && !r.started){
               r.started = true;
               r.seed = makeId()+Date.now();
+              r.startedAt = Date.now();
               r.done.clear();
               r.scores.clear();
-              for(const c of r.clients){ r.scores.set(c, 0); }
+              r.lines.clear?.();
+              for(const c of r.clients){ r.scores.set(c, 0); try{ r.lines.set(c, 0); }catch{} }
               const initScores2 = Array.from(r.clients).map(c=>({ id: c.id, name: c.name||null, score: 0 }));
               for(const c of r.clients){ send(c, { type:'scores', list: initScores2 }); }
               for(const c of r.clients){ send(c, { type:'start', seed: r.seed, room: r.id }); }
@@ -406,34 +515,37 @@ wss.on('connection', (ws)=>{
       r.done.add(ws);
       broadcast(ws, { type: 'gameover', who: ws.id }, true);
       if(r.clients.size >= 2 && r.done.size >= 2){
-        // match over
-        const scores = Array.from(r.clients).map(c=>({ id: c.id, name: c.name||null, score: r.scores.get(c)||0 }));
+  // match over
+  const scores = Array.from(r.clients).map(c=>({ id: c.id, name: c.name||null, score: r.scores.get(c)||0, lines: (r.lines && r.lines.get(c)) || 0 }));
         for(const c of r.clients){ send(c, { type:'matchover', scores }); }
     try{ console.log(`[MATCH] Terminée: room=${r.id} scores=${scores.map(s=>`${s.name||s.id}:${s.score}`).join(', ')}`); }catch{}
         // persist to server-side leaderboard
   try{
-      const pushIfTop = (nm, sc)=>{
-            const doInsert = ()=>{
-              const currentTop = getTop10();
-              const threshold = currentTop.length<10 ? 0 : (currentTop[9]?.score||0);
-              if(sc > threshold){
-        leaderboard.push({ name: nm, score: sc, ts: Date.now(), durationMs: 0 });
-                leaderboard = leaderboard.sort((a,b)=> (b.score||0)-(a.score||0)).slice(0,1000);
-                saveLeaderboard();
-              }
-            };
-            if(!leaderboardLock){ leaderboardLock=true; try{ doInsert(); }finally{ leaderboardLock=false; } }
-            else { setTimeout(()=>{ if(!leaderboardLock){ leaderboardLock=true; try{ doInsert(); }finally{ leaderboardLock=false; } } }, 20); }
-          };
-          for(const s of scores){
-            const nm = (s.name && String(s.name).slice(0,32)) || 'Player';
-            const sc = Number(s.score)||0;
-            if(sc>0){ pushIfTop(nm, sc); }
+  const pushIfTopMulti = (nm, sc, ln, durMs)=>{
+        const doInsert = ()=>{
+          const currentTop = getTop10('multi');
+          const threshold = currentTop.length<10 ? 0 : (currentTop[9]?.score||0);
+          if(sc > threshold){
+    const entry = { name: nm, score: sc, ts: Date.now(), durationMs: Math.max(0, Number(durMs||0)), lines: Math.max(0, Number(ln||0)) };
+            leaderboardMulti.push(entry);
+            leaderboardMulti = leaderboardMulti.sort((a,b)=> (b.score||0)-(a.score||0)).slice(0,1000);
+            saveLeaderboard();
           }
-          logTop10('Après matchover');
-        }catch{}
+        };
+        if(!leaderboardLock){ leaderboardLock=true; try{ doInsert(); }finally{ leaderboardLock=false; } }
+        else { setTimeout(()=>{ if(!leaderboardLock){ leaderboardLock=true; try{ doInsert(); }finally{ leaderboardLock=false; } } }, 20); }
+      };
+  const dur = (r.startedAt ? (Date.now() - r.startedAt) : 0);
+  for(const s of scores){
+        const nm = (s.name && String(s.name).slice(0,32)) || 'Player';
+        const sc = Number(s.score)||0;
+    const ln = Math.max(0, Number(s.lines||0));
+    if(sc>0){ pushIfTopMulti(nm, sc, ln, dur); }
+      }
+      logTop10('Après matchover');
+    }catch{}
     // reset state for possible rematch
-  r.started = false; r.seed = null; r.ready.clear(); r.done.clear(); r.lastEndedTs = Date.now(); if(r.countdownTimer){ clearTimeout(r.countdownTimer); r.countdownTimer = null; }
+  r.started = false; r.seed = null; r.startedAt = null; r.ready.clear(); r.done.clear(); r.lastEndedTs = Date.now(); if(r.countdownTimer){ clearTimeout(r.countdownTimer); r.countdownTimer = null; }
   // push updated rooms & players list to everyone
   for(const c of wss.clients){ try{ c.send(JSON.stringify({ type:'rooms', rooms: roomInfo() })); c.send(JSON.stringify({ type:'players', players: playersInfo() })); }catch{} }
       }
@@ -446,7 +558,7 @@ wss.on('connection', (ws)=>{
   // notify clients and clear
   if(r.countdownTimer){ clearTimeout(r.countdownTimer); r.countdownTimer = null; for(const c of r.clients){ send(c, { type:'countdown_cancel' }); } }
   // reset state to allow clean relaunch on future reuse
-  r.started = false; r.seed = null; r.ready.clear(); r.done.clear();
+  r.started = false; r.seed = null; r.startedAt = null; r.ready.clear(); r.done.clear();
       for(const c of r.clients){ send(c, { type:'room_closed', room: id }); c.room = null; }
   rooms.delete(id);
       if(ws.ownsRoomId === id) ws.ownsRoomId = null;
@@ -462,7 +574,7 @@ wss.on('connection', (ws)=>{
       r.scores.delete(ws);
   if(r.countdownTimer){ clearTimeout(r.countdownTimer); r.countdownTimer = null; for(const c of r.clients){ send(c, { type:'countdown_cancel' }); } }
   // si quelqu'un part, reposer la salle à un état non démarré pour permettre une relance propre
-  r.started = false; r.seed = null; r.ready.clear(); r.done.clear();
+  r.started = false; r.seed = null; r.startedAt = null; r.ready.clear(); r.done.clear();
       ws.room = null;
       // notify remaining peers
   const connected = r.clients.size >= 2;
@@ -527,7 +639,7 @@ function broadcast(ws, obj, toOthers=false){
 
 function join(ws, id){
   // ensure room
-  if(!rooms.has(id)) rooms.set(id, { id, name:null, ownerName:null, ownerTop:0, clients: new Set(), ready:new Set(), started:false, seed:null, done:new Set(), scores:new Map(), owner: null, countdownTimer: null, lastEndedTs: null });
+  if(!rooms.has(id)) rooms.set(id, { id, name:null, ownerName:null, ownerTop:0, clients: new Set(), ready:new Set(), started:false, seed:null, done:new Set(), scores:new Map(), lines:new Map(), startedAt:null, owner: null, countdownTimer: null, lastEndedTs: null });
   const r = rooms.get(id);
   if(r.clients.size >= 2){ send(ws,{ type:'error', message:'Room full' }); return; }
   r.clients.add(ws);

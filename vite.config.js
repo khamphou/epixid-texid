@@ -9,6 +9,10 @@ export default defineConfig({
         target: 'http://localhost:8787',
         changeOrigin: true,
       },
+      '/players': {
+        target: 'http://localhost:8787',
+        changeOrigin: true,
+      },
       '/purge': {
         target: 'http://localhost:8787',
         changeOrigin: true,

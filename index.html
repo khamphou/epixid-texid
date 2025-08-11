@@ -222,14 +222,25 @@
         </section>
 
         <aside class="sidebar">
-          <div class="panel status">
+          <div class="panel status" id="panel-status-self">
+            <div class="stat name"><span>Joueur</span><strong id="name-self">–</strong></div>
             <div class="stat"><span>Niveau</span><strong id="level">1 — Pepouz</strong></div>
             <div class="stat big"><span>Score</span><strong id="score">0</strong></div>
             <div class="stat"><span>Lignes</span><strong id="lines">0</strong></div>
           </div>
-          <div id="panel-mp" class="panel board">
-            <h2>Multijoueur</h2>
-            <ul id="players-list" class="players-list"></ul>
+          <!-- Panneau stats adversaire -->
+          <div class="panel status" id="panel-status-opp">
+            <div class="stat name"><span>Adversaire</span><strong id="name-opp">–</strong></div>
+            <div class="stat"><span>Niveau</span><strong id="level-opp">–</strong></div>
+            <div class="stat big"><span>Score</span><strong id="score-opp">–</strong></div>
+            <div class="stat"><span>Lignes</span><strong id="lines-opp">–</strong></div>
+          </div>
+          <!-- Panneau Observateurs -->
+          <div id="panel-observers" class="panel">
+            <h2>
+              Observateurs
+              <button id="obs-badge" class="spectators-badge" type="button" title="Voir les observateurs" aria-label="Observateurs"></button>
+            </h2>
           </div>
 
           <div class="panel next">
@@ -245,7 +256,7 @@
             <canvas id="opp-mini" width="120" height="240" aria-label="Aperçu adversaire"></canvas>
           </div>
 
-          <div class="panel emotes">
+          <div id="panel-emotes" class="panel emotes">
             <div class="emotes-title">
               <h2>Emotes</h2>
               <button id="emotes-more" class="btn icon sm" aria-label="Afficher tous les emotes" title="Afficher tous les emotes" aria-expanded="false" aria-controls="emotes-grid">

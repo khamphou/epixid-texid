@@ -87,14 +87,21 @@ export class AudioFX {
     }
     if (!chillList.length) {
       try {
-        // Chemin relatif depuis src/audio.js vers assets/music/chill
-        // Utilise Vite import.meta.glob pour récupérer des URLs directes
-  const glob = import.meta && import.meta.glob ? import.meta.glob('../assets/music/chill/**/*.{mp3,ogg,wav}', { eager: true, query: '?url', import: 'default' }) : null;
-        if (glob) chillList = Object.values(glob).filter(Boolean);
+        // Utiliser import.meta.glob de manière inconditionnelle pour permettre à Vite
+        // d’injecter la liste au build (pas de garde runtime qui le neutraliserait)
+        const glob = import.meta.glob('../assets/music/chill/**/*.{mp3,ogg,wav}', {
+          eager: true,
+          query: '?url',
+          import: 'default'
+        });
+        chillList = Object.values(glob).filter(Boolean);
       } catch {}
     }
     if (!chillList.length) {
-      chillList = ['assets/music/chill.mp3'];
+      // Fallback ultime: pointer vers un fichier réel connu du dossier
+      // (Vite réécrira cette URL vers le fichier fingerprinté en prod)
+      try { chillList = [ new URL('../assets/music/chill/chill.mp3', import.meta.url).href ]; }
+      catch { chillList = []; }
     }
 
     // Source stress (inchangé par défaut)

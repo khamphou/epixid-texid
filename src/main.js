@@ -228,6 +228,7 @@ const cancelLeave = document.getElementById('cancel-leave');
 const confirmLeave = document.getElementById('confirm-leave');
 // bloc serveur retiré
 // éléments additionnels
+const meLabelEl = document.getElementById('me-label');
 const oppLabel = document.getElementById('opp-label');
 const countdownOverlay = document.getElementById('countdown-overlay');
 const countdownTextEl = document.getElementById('countdown-text');
@@ -324,7 +325,7 @@ let serverCountdownStart = 0;
 let serverCountdownDur = 0;
 // Identité / noms / victoires
 let selfId = null;
-let oppName = 'Adversaire';
+let oppName = '';
 let myWins = 0;
 let oppWins = 0;
 // Cache de la liste des joueurs pour le résumé (écran Rejoindre)
@@ -843,8 +844,8 @@ function drawObserverBoards(){
   }
   // Libellés
   const meLabel = document.getElementById('me-label');
-  if(meLabel){ meLabel.textContent = String(obsLeftName||'Joueur A'); }
-  if(obsRightLabel){ obsRightLabel.textContent = String(obsRightName||'Joueur B'); }
+  if(meLabel){ meLabel.textContent = String(obsLeftName||''); }
+  if(obsRightLabel){ obsRightLabel.textContent = String(obsRightName||''); }
 }
 
 // Dessine la pièce active avec un petit zoom et un fade-in (t in 0..1)
@@ -1107,6 +1108,7 @@ function updateHUD(){
   elScore && (elScore.textContent = score);
   try{ const elLines = document.getElementById('lines'); if(elLines) elLines.textContent = String(linesClearedTotal||0); }catch{}
   try{ refreshStatsPanels(); }catch{}
+  try{ refreshBoardLabels(); }catch{}
 }
 
 function refreshStatsPanels(){
@@ -1130,6 +1132,25 @@ function refreshStatsPanels(){
   }catch{}
 }
 
+function refreshBoardLabels(){
+  try{
+    // Mon libellé
+    if(meLabelEl){
+      const nmSelf = (observingRoom && !roomId) ? (obsLeftName || '') : (playerName || '');
+      meLabelEl.textContent = String(nmSelf);
+    }
+    // Libellé adversaire (côté plateau secondaire)
+    if(oppLabel){
+      const nmOpp = (observingRoom && !roomId) ? (obsRightName || '') : (peerConnected ? (oppName || oppLabel.textContent || '') : '');
+      oppLabel.textContent = String(nmOpp);
+    }
+    // Libellé plateau droit en mode spectateur
+    if(obsRightLabel && (observingRoom && !roomId)){
+      obsRightLabel.textContent = String(obsRightName || '');
+    }
+  }catch{}
+}
+
 function updateObserversBadge(){
   try{
     if(obsBadgeEl){
@@ -1143,7 +1164,7 @@ function updateObserversBadge(){
 
 function updateScoreLabels(){
   if(meScoreEl){ meScoreEl.textContent = `${Number(score||0)}${myWins? ` (V:${myWins})` : ''}`; }
-    if(oppScoreEl){ oppScoreEl.textContent = `${Number(opponentScore||0)}${oppWins? ` (V:${oppWins})` : ''} (Adversaire)`; }
+  if(oppScoreEl){ oppScoreEl.textContent = `${Number(opponentScore||0)}${oppWins? ` (V:${oppWins})` : ''}`; }
 }
 
 function renderTop10(){
@@ -2101,7 +2122,7 @@ function connectWS(){
           myReady = !!isOwner; // l'hôte est prêt par défaut (miroir du serveur)
           peerReady=false; updateReadyBadges();
           // nom de l’adversaire si on n’est pas l’hôte
-          if(!isOwner && roomMeta.ownerName){ const el= document.getElementById('opp-label'); if(el) el.textContent = roomMeta.ownerName; }
+          if(!isOwner && roomMeta.ownerName){ oppName = roomMeta.ownerName; const el= document.getElementById('opp-label'); if(el) el.textContent = roomMeta.ownerName; try{ refreshBoardLabels(); }catch{} }
           updateOwnerUI(); updateStartButtonLabel(); showGame(); showWaiting(!peerConnected); updateOpponentVisibility(); renderPlayersList(); try{ updateEmotesEnabled(); }catch{} try{ refreshStatsPanels(); updateObserversBadge(); }catch{}
           try{ updateInputLock(); }catch{}
           // Si je suis hôte et prêt par défaut, envoyer l'état au serveur
@@ -2165,7 +2186,7 @@ function connectWS(){
               // Injecter dans nos panneaux comme si left=moi, right=adversaire (lecture seule)
               score = Number(left?.score||0); linesClearedTotal = Math.max(0, Number(left?.lines||0)); level = Math.max(1, Number(left?.level||1));
               opponentScore = Number(right?.score||0); opponentLines = Math.max(0, Number(right?.lines||0)); opponentLevel = Math.max(1, Number(right?.level||1));
-              const oppl = document.getElementById('opp-label'); if(oppl) oppl.textContent = String(obsRightName||'Adversaire');
+              const oppl = document.getElementById('opp-label'); if(oppl) oppl.textContent = String(obsRightName||''); try{ refreshBoardLabels(); }catch{}
               // Statuts prêts (affichage non bloquant)
               myReady = !!left?.ready; peerReady = !!right?.ready; updateReadyBadges();
             }
@@ -2281,12 +2302,12 @@ function connectWS(){
                 obsLeftName = a?.name || a?.id || '';
                 obsRightName = b?.name || b?.id || '';
               }
-              const oppl = document.getElementById('opp-label'); if(oppl) oppl.textContent = String(obsRightName||'Adversaire');
+              const oppl = document.getElementById('opp-label'); if(oppl) oppl.textContent = String(obsRightName||''); try{ refreshBoardLabels(); }catch{}
               renderPlayersList();
             }
           } else {
             const other = arr.find(p=> p.id !== selfId);
-            if(other && other.name){ const el= document.getElementById('opp-label'); if(el) el.textContent = other.name; }
+            if(other && other.name){ oppName = other.name; const el= document.getElementById('opp-label'); if(el) el.textContent = other.name; try{ refreshBoardLabels(); }catch{} }
           }
           renderPlayersList();
         } break;
@@ -2337,7 +2358,7 @@ function connectWS(){
               score=0; opponentScore=0; linesClearedTotal=0; opponentLines=0; level=1; opponentLevel=1;
               mpStarted=false; running=false; paused=false; selfDead=false; opponentDead=false; opponentActive=null;
               // Labels adversaire génériques
-              const oppl = document.getElementById('opp-label'); if(oppl) oppl.textContent = 'Adversaire';
+              const oppl = document.getElementById('opp-label'); if(oppl) oppl.textContent = ''; try{ refreshBoardLabels(); }catch{}
               // Afficher les deux plateaux (lecture seule)
               updateOpponentVisibility(); updateStartButtonLabel(); renderPlayersList(); updateObserversBadge(); draw(); if(oppCtx) drawOpponent();
               updateInputLock(); updateEmotesEnabled();
@@ -3002,6 +3023,8 @@ function updateOpponentVisibility(){
   try{ if(btnNew){ btnNew.style.display = (observingRoom && !roomId) ? 'none' : ''; } }catch{}
   // Badge observateurs
   try{ updateObserversBadge(); }catch{}
+  // Rafraîchir les libellés
+  try{ refreshBoardLabels(); }catch{}
 }
 
 // ---------- UI helpers ----------

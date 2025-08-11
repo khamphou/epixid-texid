@@ -236,6 +236,19 @@ canvas.fx{position:absolute;left:10px;top:10px;pointer-events:none;mix-blend-mod
 /* Unification: mêmes tailles et formats pour tout le texte de la sidebar */
 .sidebar .panel, .sidebar .panel *{font-size:12px; line-height:1.22}
 
+/* Solo: masquer panneau stats adversaire et panel Observateurs */
+.solo-mode #panel-status-opp{ display:none !important }
+.solo-mode #panel-observers{ display:none !important }
+
+/* Observateurs: titre aligné + badge bouton compact */
+#panel-observers h2{ display:flex; align-items:center; justify-content:space-between; gap:8px; margin:0 0 6px }
+.spectators-badge{ display:inline-flex; align-items:center; gap:6px; padding:4px 8px; border-radius:999px; border:1px solid #2a2f37; background:linear-gradient(180deg,#1e232b,#12151a); color:#cdd3dd; font-weight:600; font-size:11px; line-height:1; cursor:pointer }
+.spectators-badge:hover{ border-color:#3a404b; color:#fff; box-shadow:0 0 0 2px rgba(56,189,248,.15) }
+
+/* Noms dans les panneaux statut: ellipsis si trop long */
+#panel-status-self .stat.name strong,
+#panel-status-opp .stat.name strong{ max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+
 /* Emote bubble: en haut, simple fade-in/out */
 #board-me, #board-opp{position:relative}
 #board-me .frame, #board-opp .frame{position:relative}
@@ -406,6 +419,8 @@ canvas.fx{position:absolute;left:10px;top:10px;pointer-events:none;mix-blend-mod
   .panel h2{font-size:10px}
   /* Sidebar très compacte et uniforme en mobile */
   .sidebar .panel, .sidebar .panel *{font-size:9.5px; line-height:1.2}
+  /* Badge observateurs en mobile: encore plus compact */
+  .spectators-badge{ padding:3px 6px; font-size:9.5px }
   /* Uniformiser Score avec Niveau/Lignes */
   .status .big strong{font-size:9.5px}
   /* Liste multi encore plus compacte */
@@ -448,6 +463,7 @@ canvas.fx{position:absolute;left:10px;top:10px;pointer-events:none;mix-blend-mod
 }
   .panel h2{font-size:9px}
   .sidebar .panel, .sidebar .panel *{font-size:8.5px; line-height:1.15}
+  .spectators-badge{ padding:3px 6px; font-size:8.5px }
   /* Uniformiser Score avec Niveau/Lignes */
   .status .big strong{font-size:8.5px}
   .panel.next canvas{width:40px; height:40px}
@@ -470,6 +486,7 @@ canvas.fx{position:absolute;left:10px;top:10px;pointer-events:none;mix-blend-mod
   .app-title{font-size:15px}
   .panel h2{font-size:8.5px}
   .sidebar .panel, .sidebar .panel *{font-size:7.8px; line-height:1.12}
+  .spectators-badge{ padding:2px 5px; font-size:7.8px }
   /* Uniformiser Score avec Niveau/Lignes */
   .status .big strong{font-size:7.8px}
   .panel.next canvas{width:34px; height:34px}

@@ -147,6 +147,10 @@ const oppMiniCtx = oppMini ? oppMini.getContext('2d') : null;
 // Opponent canvas (2 joueurs)
 const oppCvs = document.getElementById('opp');
 const oppCtx = oppCvs ? oppCvs.getContext('2d') : null;
+// Vue dédiée spectateur (grille droite)
+const obsRightCvs = document.getElementById('obs-right');
+const obsRightCtx = obsRightCvs ? obsRightCvs.getContext('2d') : null;
+const obsRightLabel = document.getElementById('obs-right-label');
 const elScore = document.getElementById('score');
 const elLevel = document.getElementById('level');
 const elSpeed = document.getElementById('speed'); // deviendra l’étiquette du niveau nommé
@@ -223,6 +227,22 @@ const roomTag = document.getElementById('room-tag');
 const roomIdEl = document.getElementById('room-id');
 const toastEl = document.getElementById('toast');
 const panelMP = document.getElementById('panel-mp');
+// Modale observateurs
+const dlgSpectators = document.getElementById('dlg-spectators');
+const spectatorsListEl = document.getElementById('spectators-list');
+const spectatorsCloseBtn = document.getElementById('spectators-close');
+// Observateurs: état UI et suivi de la salle observée
+let obsCount = 0;
+let spectatorsList = [];
+let observingRoom = null; // id de la salle observée si on n'est pas joueur
+let pendingObserveRoom = null; // demande en attente
+// Mappage spectateur: joueurs gauche/droite
+let obsLeftId = null, obsRightId = null;
+let obsLeftName = 'Joueur A', obsRightName = 'Joueur B';
+let obsLeftGrid = Array.from({length:ROWS},()=>Array(COLS).fill(null));
+let obsRightGrid = Array.from({length:ROWS},()=>Array(COLS).fill(null));
+let obsLeftActive = null;
+let obsRightActive = null;
 // Emotes UI
 const emotesGridEl = document.getElementById('emotes-grid');
 const emotesTopEl = document.getElementById('emotes-top');
@@ -257,6 +277,8 @@ let roomId = null;
 let roomMeta = { name: null, ownerName: null, ownerTop: 0 };
 let opponentGrid = Array.from({length:ROWS},()=>Array(COLS).fill(null));
 let opponentScore = 0;
+let opponentLevel = 1;
+let opponentLines = 0;
 let peerConnected = false;
 let seed = null;
 let rng = Math.random;
@@ -678,35 +700,46 @@ function draw(){
       drawCell(c,r,COLORS[k]);
     }
   }
-  // pièce active (avec effet d'apparition au spawn)
-  const canShowActive = !!active && !(roomId && !mpStarted);
-  if(canShowActive){
-    const now = performance.now();
-    const spElapsed = now - (spawnFxStart||0);
-    const showSpawn = spElapsed >= 0 && spElapsed < spawnFxDur;
-    if(showSpawn){
-      drawActiveWithSpawnFX(spElapsed / spawnFxDur);
-    } else {
-      for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(active.mat[j][i]){
-        drawCell(x+i,y+j,COLORS[active.key], true);
+  // pièce active (joueur ou observation)
+  const isObserving = !!(observingRoom && !roomId);
+  if(isObserving){
+    // Dessiner la pièce active du joueur de gauche (obsLeftActive) sans FX
+    const a = obsLeftActive;
+    if(a && a.mat){ for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(a.mat[j][i]){ drawCell((a.x||0)+i, (a.y||0)+j, COLORS[a.key]||'#9AA0A8', true); } }
+  } else {
+    const canShowActive = !!active && !(roomId && !mpStarted);
+    if(canShowActive){
+      const now = performance.now();
+      const spElapsed = now - (spawnFxStart||0);
+      const showSpawn = spElapsed >= 0 && spElapsed < spawnFxDur;
+      if(showSpawn){
+        drawActiveWithSpawnFX(spElapsed / spawnFxDur);
+      } else {
+        for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(active.mat[j][i]){
+          drawCell(x+i,y+j,COLORS[active.key], true);
+        }
       }
     }
   }
 
     // Ombre projetée (ghost) + guides (Easy uniquement)
-  if(canShowActive){
-    const landing = getLandingY(x, y, active.mat);
-    drawGhost(x, landing, active);
-    if(easyMode){
-      drawLandingVerticals(x, landing, active.mat);
-      drawLandingEdges(x, landing, active.mat);
+  if(!isObserving){
+    const canShowActive = !!active && !(roomId && !mpStarted);
+    if(canShowActive){
+      const landing = getLandingY(x, y, active.mat);
+      drawGhost(x, landing, active);
+      if(easyMode){
+        drawLandingVerticals(x, landing, active.mat);
+        drawLandingEdges(x, landing, active.mat);
+      }
     }
   }
 
     // Effet arcs lumineux si rotation récente
   const now = performance.now();
   const elapsed = now - (rotFxStart||0);
-  if(canShowActive && elapsed >= 0 && elapsed < rotFxDur){
+  const canFx = !isObserving && !!active && !(roomId && !mpStarted);
+  if(canFx && elapsed >= 0 && elapsed < rotFxDur){
       const t = 1 - (elapsed/rotFxDur);
       const ang = t * Math.PI * 2; // rotation rapide
   const { cx, cy } = getActiveCenterOfMass();
@@ -723,8 +756,8 @@ function draw(){
       ctx.restore();
     }
 
-  // Hint (Mode Easy)
-  if(canShowActive && easyMode && hint){
+  // Hint (Mode Easy) — uniquement pour le joueur (pas en observation)
+  if(!isObserving && !!active && !(roomId && !mpStarted) && easyMode && hint){
     drawHint(hint);
   }
   // overlay Game Over pour nous si perdu
@@ -755,9 +788,53 @@ function draw(){
   // Mettre à jour le HUD en continu
   updateHUD();
   // Opponent board
-  if(oppCtx){ drawOpponent(); }
+  if(observingRoom && !roomId){
+    // Mode spectateur: dessiner la grille gauche sur notre canvas principal (grid) et la droite sur obsRight
+    drawObserverBoards();
+  } else {
+    if(oppCtx){ drawOpponent(); }
+  }
   // Miniatures (mobile)
   try{ if(oppMiniCtx){ drawOppMini(); } }catch{}
+}
+
+function drawObserverBoards(){
+  // Notre canvas principal utilise obsLeftGrid comme source (déjà injecté dans grid pour simplifier)
+  // Canvas droit dédié
+  if(!obsRightCtx || !obsRightCvs) return;
+  // Ajuster tailles pour cohérence
+  const pxW = TILE * COLS; const pxH = TILE * ROWS;
+  if(obsRightCvs.width !== pxW) obsRightCvs.width = pxW;
+  if(obsRightCvs.height !== pxH) obsRightCvs.height = pxH;
+  obsRightCvs.style.width = pxW + 'px';
+  obsRightCvs.style.height = pxH + 'px';
+  // Fond
+  obsRightCtx.clearRect(0,0,pxW,pxH);
+  obsRightCtx.fillStyle = '#0e1116';
+  obsRightCtx.fillRect(0,0,pxW,pxH);
+  obsRightCtx.strokeStyle = '#1f242c';
+  obsRightCtx.lineWidth = 1;
+  for(let i=1;i<COLS;i++){ obsRightCtx.beginPath(); obsRightCtx.moveTo(i*TILE,0); obsRightCtx.lineTo(i*TILE,ROWS*TILE); obsRightCtx.stroke(); }
+  for(let j=1;j<ROWS;j++){ obsRightCtx.beginPath(); obsRightCtx.moveTo(0,j*TILE); obsRightCtx.lineTo(COLS*TILE,j*TILE); obsRightCtx.stroke(); }
+  // Cellules droites
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){ const k = obsRightGrid[r][c]; if(k){ const px=c*TILE, py=r*TILE; const g=obsRightCtx.createLinearGradient(px,py,px,py+TILE); g.addColorStop(0,shade(COLORS[k],6)); g.addColorStop(1,shade(COLORS[k],-8)); obsRightCtx.fillStyle=g; roundRect(obsRightCtx, px+2, py+2, TILE-4, TILE-4, 6); obsRightCtx.fill(); obsRightCtx.strokeStyle='rgba(0,0,0,.25)'; obsRightCtx.lineWidth=1.5; roundRect(obsRightCtx, px+2, py+2, TILE-4, TILE-4, 6); obsRightCtx.stroke(); } }
+  // Pièce active droite
+  if(obsRightActive && obsRightActive.mat){
+    obsRightCtx.save(); obsRightCtx.globalAlpha = 0.65;
+    const color = COLORS[obsRightActive.key] || '#9AA0A8';
+    for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(obsRightActive.mat[j][i]){
+      const cx = obsRightActive.x + i, cy = obsRightActive.y + j;
+      const px=cx*TILE, py=cy*TILE;
+      const g=obsRightCtx.createLinearGradient(px,py,px,py+TILE);
+      g.addColorStop(0, shade(color,6)); g.addColorStop(1, shade(color,-8));
+      obsRightCtx.fillStyle=g; roundRect(obsRightCtx, px+2, py+2, TILE-4, TILE-4, 6); obsRightCtx.fill();
+    }
+    obsRightCtx.restore();
+  }
+  // Libellés
+  const meLabel = document.getElementById('me-label');
+  if(meLabel){ meLabel.textContent = String(obsLeftName||'Joueur A'); }
+  if(obsRightLabel){ obsRightLabel.textContent = String(obsRightName||'Joueur B'); }
 }
 
 // Dessine la pièce active avec un petit zoom et un fade-in (t in 0..1)
@@ -1313,7 +1390,9 @@ function isInputLocked(){
     if(paused) return true;
     if(!running) return true;
     if(serverCountdownActive) return true;
-    if(roomId && (!mpStarted || !peerConnected)) return true;
+  if(roomId && (!mpStarted || !peerConnected)) return true;
+  // En mode observateur, on bloque toujours les entrées
+  if(observingRoom && !roomId) return true;
     return false;
   }catch{ return false; }
 }
@@ -1331,6 +1410,8 @@ document.getElementById('btn-new').addEventListener('click', async ()=>{
   await askName();
   // En multijoueur: toujours gérer l'état "prêt"; le serveur lancera quand les deux sont prêts
   if(roomId){ toggleReady(); return; }
+  // Si on observe une salle, ne rien faire
+  if(observingRoom && !roomId){ return; }
   // Solo
   try{ dlgGameOver && dlgGameOver.close(); }catch{}
   try{ dlgResult && dlgResult.close(); }catch{}
@@ -1948,6 +2029,8 @@ function connectWS(){
           break;
         case 'joined':
           roomId = msg.room; isOwner = !!msg.owner;
+          // Si on observait une autre salle, arrêter
+          if(observingRoom && observingRoom !== roomId){ try{ ws && ws.readyState===1 && ws.send(JSON.stringify({ type:'unobserve' })); }catch{} observingRoom = null; }
           roomMeta = { name: msg.name||null, ownerName: msg.ownerName||null, ownerTop: Number(msg.ownerTop||0) };
           // enregistrer notre id côté client
           if(msg.selfId) { try{ selfId = msg.selfId; }catch{} }
@@ -1986,21 +2069,73 @@ function connectWS(){
           if(roomTag && roomIdEl){ roomIdEl.textContent = roomId; roomTag.classList.remove('hidden'); }
           break;
         case 'state':
-          if(msg.grid){ opponentGrid = msg.grid; }
-          if(typeof msg.score==='number'){ opponentScore=msg.score; }
-          if(msg.active){ opponentActive = msg.active; }
-          // Redessiner immédiatement le plateau adverse pour qu’un joueur éliminé voie l’action en direct
-          if(oppCtx){ drawOpponent(); }
-          try{ if(oppMiniCtx){ drawOppMini(); } }catch{}
+          if(observingRoom && !roomId){
+            const who = msg.who || null;
+            if(who){
+              // Assigner who à gauche/droite si nécessaire
+              if(!obsLeftId || (obsLeftId!==who && obsRightId!==who)){
+                if(!obsLeftId) obsLeftId = who; else obsRightId = who;
+              }
+              const toLeft = (who === obsLeftId);
+              const gridRef = toLeft ? obsLeftGrid : obsRightGrid;
+              const actRef = toLeft ? 'obsLeftActive' : 'obsRightActive';
+              if(msg.grid){
+                // Copie superficielle de la grille reçue
+                const g = Array.isArray(msg.grid) ? msg.grid : [];
+                for(let r=0;r<ROWS;r++){
+                  for(let c=0;c<COLS;c++){
+                    const v = (g[r] && g[r][c]) || null;
+                    gridRef[r][c] = v;
+                  }
+                }
+                if(toLeft){ grid = obsLeftGrid; } // refléter à gauche pour draw()
+              }
+              if(msg.active){ if(toLeft){ obsLeftActive = msg.active; } else { obsRightActive = msg.active; } }
+              // Scores affichés via 'scores', ici on redessine
+              draw();
+            }
+          } else {
+            if(msg.grid){ opponentGrid = msg.grid; }
+            if(typeof msg.score==='number'){ opponentScore=msg.score; }
+            if(typeof msg.level==='number'){ opponentLevel = Math.max(1, Number(msg.level||1)); }
+            if(typeof msg.lines==='number'){ opponentLines = Math.max(0, Number(msg.lines||0)); }
+            if(msg.active){ opponentActive = msg.active; }
+            if(oppCtx){ drawOpponent(); }
+            try{ if(oppMiniCtx){ drawOppMini(); } }catch{}
+          }
           // ne pas toucher à opponentDead ici pour conserver l'affichage "Éliminé" jusqu'au prochain start
           break;
         case 'scores': {
           const list = Array.isArray(msg.list)? msg.list : [];
-          const mine = list.find(e=> e && e.id === selfId);
-          const other = list.find(e=> e && e.id !== selfId);
-          if(mine && typeof mine.score==='number'){ score = mine.score; elScore && (elScore.textContent = String(score)); }
-          if(other && typeof other.score==='number'){ opponentScore = other.score; }
-          updateScoreLabels(); updateHUD(); renderPlayersList();
+          if(observingRoom && !roomId){
+            // Mode spectateur: trier par nom/id stable pour l’affichage
+            const a = list[0]||null, b = list[1]||null;
+            if(a && b){
+              // Fixer le mapping la première fois
+              if(!obsLeftId || (obsLeftId!==a.id && obsLeftId!==b.id)){
+                obsLeftId = a.id; obsRightId = b.id;
+                obsLeftName = a.name || a.id || 'Joueur A';
+                obsRightName = b.name || b.id || 'Joueur B';
+              }
+              const left = (a.id===obsLeftId)? a : b;
+              const right = (left===a)? b : a;
+              // Injecter dans nos panneaux comme si left=moi, right=adversaire (lecture seule)
+              score = Number(left?.score||0); linesClearedTotal = Math.max(0, Number(left?.lines||0)); level = Math.max(1, Number(left?.level||1));
+              opponentScore = Number(right?.score||0); opponentLines = Math.max(0, Number(right?.lines||0)); opponentLevel = Math.max(1, Number(right?.level||1));
+              const oppl = document.getElementById('opp-label'); if(oppl) oppl.textContent = String(obsRightName||'Adversaire');
+              // Statuts prêts (affichage non bloquant)
+              myReady = !!left?.ready; peerReady = !!right?.ready; updateReadyBadges();
+            }
+            updateScoreLabels(); updateHUD(); renderPlayersList();
+          } else {
+            const mine = list.find(e=> e && e.id === selfId);
+            const other = list.find(e=> e && e.id !== selfId);
+            if(mine && typeof mine.score==='number'){ score = mine.score; elScore && (elScore.textContent = String(score)); }
+            if(other && typeof other.score==='number'){ opponentScore = other.score; }
+            if(other && typeof other.level==='number'){ opponentLevel = Math.max(1, Number(other.level||1)); }
+            if(other && typeof other.lines==='number'){ opponentLines = Math.max(0, Number(other.lines||0)); }
+            updateScoreLabels(); updateHUD(); renderPlayersList();
+          }
         } break;
         case 'emote': {
           // Le receveur voit l'emote au-dessus de son propre plateau (board-me), aucun son
@@ -2027,7 +2162,7 @@ function connectWS(){
               running = false; paused = false; fx.stopMusic();
               cancelServerCountdown();
             }
-            resetGrid(); opponentGrid = Array.from({length:ROWS},()=>Array(COLS).fill(null));
+            resetGrid(); opponentGrid = Array.from({length:ROWS},()=>Array(COLS).fill(null)); opponentScore=0; opponentLevel=1; opponentLines=0;
             nextQueue = []; bag = [];
             draw(); if(oppCtx) drawOpponent();
             try{ updateInputLock(); }catch{}
@@ -2063,16 +2198,53 @@ function connectWS(){
         case 'countdown': onServerCountdown(msg.seconds||5); break;
         case 'countdown_cancel': cancelServerCountdown(); break;
         case 'start': onMatchStart(msg.seed); break;
-        case 'matchover': onMatchOver(msg.scores); break;
+        case 'matchover': {
+          // Mode observateur: afficher seulement le gagnant
+          if(msg && msg.room && observingRoom && !roomId && msg.room === observingRoom){
+            const arr = Array.isArray(msg.scores)? msg.scores : [];
+            const winner = arr.slice().sort((a,b)=> (Number(b.score||0) - Number(a.score||0)))[0];
+            if(winner){
+              const nm = winner.name || winner.id || 'Gagnant';
+              const sc = Number(winner.score||0);
+              showToast(`Gagnant: ${escapeHtml(nm)} (${sc})`, 5000);
+            } else {
+              showToast('Fin de partie', 3000);
+            }
+          } else {
+            onMatchOver(msg.scores);
+          }
+        } break;
         case 'room_closed': {
           // Pas de toast demandé quand l’hôte quitte; retour direct à l’écran des parties
           onRoomClosed();
           showJoin();
+          // Réinitialiser compteur obs local au changement d’écran
+          obsCount = 0; spectatorsList = [];
         } break;
         case 'names': {
           const arr = msg.list || [];
-          const other = arr.find(p=> p.id !== selfId);
-          if(other && other.name){ const el= document.getElementById('opp-label'); if(el) el.textContent = other.name; }
+          if(observingRoom && !roomId){
+            // Peaufiner les noms observés
+            if(arr.length>=2){
+              const a = arr[0], b = arr[1];
+              // Respecter le mappage déjà fixé par scores si présent
+              if(obsLeftId){
+                const left = arr.find(p=> p.id===obsLeftId) || a;
+                const right = arr.find(p=> p.id===obsRightId) || b;
+                obsLeftName = left?.name || left?.id || 'Joueur A';
+                obsRightName = right?.name || right?.id || 'Joueur B';
+              } else {
+                obsLeftId = a?.id||null; obsRightId = b?.id||null;
+                obsLeftName = a?.name || a?.id || 'Joueur A';
+                obsRightName = b?.name || b?.id || 'Joueur B';
+              }
+              const oppl = document.getElementById('opp-label'); if(oppl) oppl.textContent = String(obsRightName||'Adversaire');
+              renderPlayersList();
+            }
+          } else {
+            const other = arr.find(p=> p.id !== selfId);
+            if(other && other.name){ const el= document.getElementById('opp-label'); if(el) el.textContent = other.name; }
+          }
           renderPlayersList();
         } break;
         case 'stress': {
@@ -2089,6 +2261,45 @@ function connectWS(){
         case 'error': {
           const m = (msg && (msg.message||msg.msg||'Action refusée'))+'';
           showToast(m);
+        } break;
+        case 'observe_refused': {
+          // Refus de passer en observateur (cap atteint ou autre raison)
+          const reason = (msg && msg.reason) || 'Refusé';
+          showToast(`Observateur refusé${msg && msg.max? ` (max ${msg.max})` : ''}: ${reason}`);
+          pendingObserveRoom = null;
+        } break;
+    case 'spectators': {
+          // Mise à jour du compteur et de la liste des observateurs pour la salle courante
+          if(msg && msg.room && roomId && msg.room === roomId){
+            obsCount = Number(msg.count||0);
+            spectatorsList = Array.isArray(msg.list)? msg.list : [];
+      renderPlayersList();
+      try{ if(dlgSpectators && typeof dlgSpectators.open === 'boolean' && dlgSpectators.open){ renderSpectatorsModal(); } }catch{}
+          }
+          // Si on est en mode observation d'une autre salle
+          if(msg && msg.room && observingRoom && !roomId && msg.room === observingRoom){
+            obsCount = Number(msg.count||0);
+            spectatorsList = Array.isArray(msg.list)? msg.list : [];
+      try{ if(dlgSpectators && typeof dlgSpectators.open === 'boolean' && dlgSpectators.open){ renderSpectatorsModal(); } }catch{}
+          }
+          // Première confirmation d'observation -> fixer observingRoom
+          if(pendingObserveRoom && msg && msg.room === pendingObserveRoom && !roomId){
+            observingRoom = pendingObserveRoom; pendingObserveRoom = null;
+            // Reset affichage et bascule vers l'écran de jeu en mode observateur
+            try{
+              screenGame && showGame();
+              // Nettoyer nos états locaux
+              resetGrid(); opponentGrid = Array.from({length:ROWS},()=>Array(COLS).fill(null));
+              score=0; opponentScore=0; linesClearedTotal=0; opponentLines=0; level=1; opponentLevel=1;
+              mpStarted=false; running=false; paused=false; selfDead=false; opponentDead=false; opponentActive=null;
+              // Labels adversaire génériques
+              const oppl = document.getElementById('opp-label'); if(oppl) oppl.textContent = 'Adversaire';
+              // Afficher les deux plateaux (lecture seule)
+              updateOpponentVisibility(); updateStartButtonLabel(); renderPlayersList(); draw(); if(oppCtx) drawOpponent();
+              updateInputLock(); updateEmotesEnabled();
+              showToast('Mode observateur', 2000);
+            }catch{}
+          }
         } break;
       }
     };
@@ -2230,6 +2441,7 @@ function renderRoomsJoin(rooms){
     const meta = [];
   if(r.ownerName){ meta.push(`Hôte: ${r.ownerName}${r.ownerTop?` (Top ${r.ownerTop})`:''}`); }
     meta.push(`${r.count}/2`);
+    if(typeof r.spectators === 'number'){ meta.push(`👁️ ${r.spectators}`); }
   left.innerHTML = `<strong>${escapeHtml(title)}</strong> <small>— ${escapeHtml(r.id)}</small><br><small>${escapeHtml(meta.join(' • '))}</small>`;
     // Bloc droit (statut + bouton)
     const right = document.createElement('div'); right.className = 'room-right';
@@ -2237,7 +2449,25 @@ function renderRoomsJoin(rooms){
     const btn = document.createElement('button'); btn.className='btn sm'; btn.textContent='Rejoindre';
     btn.disabled = r.count>=2; // non joignable si plein
     btn.addEventListener('click', ()=>{ joinRoom(r.id); /* basculera vers le jeu à 'joined' */ });
-    right.appendChild(badge); right.appendChild(btn);
+    // Bouton Observer
+    const btnObs = document.createElement('button'); btnObs.className='btn sm ghost';
+    const canObserve = r.count > 0; // éviter d’observer une salle vide
+    btnObs.textContent = (observingRoom && observingRoom===r.id) ? 'Arrêter' : 'Observer';
+    btnObs.disabled = !canObserve;
+  btnObs.addEventListener('click', async ()=>{
+      const ok = await ensureWSReady(); if(!ok) return;
+      if(observingRoom && observingRoom===r.id){
+        try{ ws && ws.readyState===1 && ws.send(JSON.stringify({ type:'unobserve' })); }catch{}
+  observingRoom = null; pendingObserveRoom = null; obsLeftId = obsRightId = null; obsCount = 0; spectatorsList = [];
+  // Revenir à l’écran des parties
+  showJoin();
+      } else {
+    try{ ws && ws.readyState===1 && ws.send(JSON.stringify({ type:'observe', room: r.id })); pendingObserveRoom = r.id; }catch{}
+        // rester sur l’écran "Rejoindre"; l’affichage live viendra via messages
+        renderRoomsJoin(rooms);
+      }
+    });
+    right.appendChild(badge); right.appendChild(btn); right.appendChild(btnObs);
     li.appendChild(left); li.appendChild(right);
     roomsJoin.appendChild(li);
   });
@@ -2383,14 +2613,30 @@ setInterval(()=>{
   // Émettre seulement si une manche est en cours
   if(!mpStarted || !running) return;
   updateScoreLabels();
-  mpSend({type:'state', grid, score, lines: linesClearedTotal||0, active: active? { key: active.key, mat: active.mat, x, y } : null});
+  mpSend({
+    type:'state',
+    grid,
+    score,
+    lines: linesClearedTotal||0,
+    level,
+    ready: !!myReady,
+    active: active? { key: active.key, mat: active.mat, x, y } : null
+  });
 }, 250);
 
 function broadcastState(){
   if(!roomId) return;
   // N’envoyer que pendant la partie
   if(!mpStarted || !running) return;
-  mpSend({type:'state', grid, score, lines: linesClearedTotal||0, active: active? { key: active.key, mat: active.mat, x, y } : null});
+  mpSend({
+    type:'state',
+    grid,
+    score,
+    lines: linesClearedTotal||0,
+    level,
+    ready: !!myReady,
+    active: active? { key: active.key, mat: active.mat, x, y } : null
+  });
 }
 
 // ------------- Ready/Start/Seeded RNG -------------
@@ -2494,8 +2740,8 @@ function updateOwnerUI(){
 }
 
 function updateReadyBadges(){
-  if(meReadyEl){ meReadyEl.textContent = myReady ? '✔' : '✖'; meReadyEl.classList.toggle('ready', myReady); meReadyEl.classList.toggle('wait', !myReady); }
-  if(oppReadyEl){ oppReadyEl.textContent = peerReady ? '✔' : '✖'; oppReadyEl.classList.toggle('ready', peerReady); oppReadyEl.classList.toggle('wait', !peerReady); }
+  if(meReadyEl){ meReadyEl.textContent = myReady ? '✅' : '⌛'; meReadyEl.classList.toggle('ready', myReady); meReadyEl.classList.toggle('wait', !myReady); }
+  if(oppReadyEl){ oppReadyEl.textContent = peerReady ? '✅' : '⌛'; oppReadyEl.classList.toggle('ready', peerReady); oppReadyEl.classList.toggle('wait', !peerReady); }
   renderPlayersList();
 }
 
@@ -2674,18 +2920,21 @@ function updateOpponentVisibility(){
   const wrap = oppCvs.closest('.board-wrap');
   // Ne pas forcer l'affichage en mobile; laisser le CSS masquer #board-opp
   if(wrap){
-    if(window.matchMedia && window.matchMedia('(max-width: 900px)').matches){
-      wrap.style.display = ''; // laisser CSS décider
-    } else {
-      wrap.style.display = roomId ? 'flex' : 'none';
+    if(window.matchMedia && window.matchMedia('(max-width: 900px)').matches){ wrap.style.display = ''; }
+    else {
+      // En mode observateur, on utilise le cadre dédié et on cache le plateau adverse standard
+      wrap.style.display = (observingRoom && !roomId) ? 'none' : (roomId ? 'flex' : 'none');
     }
   }
-  if(waitBanner){ waitBanner.classList.toggle('hidden', !roomId || !!peerConnected); }
+  if(waitBanner){
+    const hideForSpectate = !!(observingRoom && !roomId);
+    waitBanner.classList.toggle('hidden', hideForSpectate || !roomId || !!peerConnected);
+  }
   try{
     const app = document.getElementById('app');
-    if(app){ app.classList.toggle('solo-mode', !roomId); }
+    if(app){ app.classList.toggle('solo-mode', !roomId && !observingRoom); }
   }catch{}
-  if(panelMP){ panelMP.classList.toggle('hidden', !roomId); }
+  if(panelMP){ panelMP.classList.toggle('hidden', !roomId && !observingRoom); }
   // Positionner le panneau MP selon le breakpoint (mobile: plein largeur sous les plateaux)
   try{ placeMPPanel(); }catch{}
   // Recalibrer la taille du plateau au basculement solo/multi
@@ -2695,11 +2944,18 @@ function updateOpponentVisibility(){
   try{
     const easyBtn = document.getElementById('easy-btn');
     if(easyBtn){
-      const isSolo = !roomId;
+      const isSolo = !roomId && !observingRoom;
       const isKham = (playerName||'').trim().toLowerCase() === 'kham';
       if(isSolo && !isKham){ easyBtn.style.display = 'none'; }
       else { easyBtn.style.display = ''; }
     }
+  }catch{}
+  // Cadre spectateur droit
+  try{
+    const obsWrap = document.getElementById('board-obs-right');
+    if(obsWrap){ obsWrap.classList.toggle('hidden', !(observingRoom && !roomId)); }
+  const meLabel = document.getElementById('me-label'); if(meLabel && (observingRoom && !roomId)){ meLabel.textContent = String(obsLeftName||'Joueur A'); }
+  if(obsRightLabel && (observingRoom && !roomId)){ obsRightLabel.textContent = String(obsRightName||'Joueur B'); }
   }catch{}
 }
 
@@ -2773,6 +3029,7 @@ function showJoin(){
   joinPoll = setInterval(()=>{ fetchRoomsJoin(); fetchPlayersJoin(); }, 1500);
   try{ dlgGameOver && dlgGameOver.close(); }catch{}
   try{ dlgResult && dlgResult.close(); }catch{}
+  try{ dlgSpectators && dlgSpectators.close(); }catch{}
   // Remettre l'UI à plat
   resetIdleView();
 }
@@ -2827,24 +3084,46 @@ function showWaiting(on){
 function renderPlayersList(){
   if(!playersListEl) return;
   playersListEl.innerHTML = '';
-  const icon = (r)=> r? '✔' : '✖';
+  const icon = (r)=> r? '✅' : '⌛';
   const crop = (s)=>{ s = String(s||''); return s.length>8 ? (s.slice(0,8)+'…') : s; };
+  // Badge spectateurs dans l’entête du panneau
+  try{
+    const panel = document.getElementById('panel-mp');
+    if(panel){
+      let h2 = panel.querySelector('h2');
+      if(h2){
+        let badge = h2.querySelector('.spectators-badge');
+        if(!badge){
+          badge = document.createElement('button');
+          badge.className = 'spectators-badge';
+          badge.type = 'button';
+          badge.title = 'Voir les observateurs';
+          badge.setAttribute('aria-label','Observateurs');
+          badge.addEventListener('click', ()=>{ showSpectatorsModal(); });
+          h2.appendChild(badge);
+        }
+        badge.textContent = `👁️ ${Number(obsCount||0)}`;
+        badge.style.display = (Number(obsCount||0) > 0) ? '' : 'none';
+      }
+    }
+  }catch{}
   // Moi
   const me = document.createElement('li');
+  const myLabel = (observingRoom && !roomId) ? (obsLeftName || 'Joueur A') : (playerName||'Moi');
   me.innerHTML = `
-    <div class="row row1"><span class="name"><span class="st">${icon(myReady)}</span><span class="nm">${crop(playerName||'Moi')}</span></span></div>
-    <div class="row row2"><span class="sc">${Number(score||0)}</span></div>`;
+    <div class="row row1"><span class="name"><span class="st">${icon(myReady)}</span><span class="nm">${crop(myLabel)}</span></span></div>
+    <div class="row row2"><span class="sc">Score ${Number(score||0)} • Lignes ${Number(linesClearedTotal||0)} • Niv ${Number(level||1)}</span></div>`;
   playersListEl.appendChild(me);
   // Adversaire
   const opp = document.createElement('li');
   if(peerConnected){
-    const name = (document.getElementById('opp-label')?.textContent)||'Adversaire';
+  const name = (observingRoom && !roomId) ? (obsRightName || 'Joueur B') : ((document.getElementById('opp-label')?.textContent)||'Adversaire');
     opp.innerHTML = `
       <div class="row row1"><span class="name"><span class="st">${icon(peerReady)}</span><span class="nm">${crop(name)}</span></span></div>
-      <div class="row row2"><span class="sc">${Number(opponentScore||0)}</span></div>`;
+      <div class="row row2"><span class="sc">Score ${Number(opponentScore||0)} • Lignes ${Number(opponentLines||0)} • Niv ${Number(opponentLevel||1)}</span></div>`;
   } else {
     opp.innerHTML = `
-      <div class="row row1"><span class="name"><span class="st">✖</span><span class="nm">—</span></span></div>
+      <div class="row row1"><span class="name"><span class="st">⌛</span><span class="nm">—</span></span></div>
       <div class="row row2"><span class="sc">–</span></div>`;
   }
   playersListEl.appendChild(opp);
@@ -2897,6 +3176,31 @@ function formatDur(ms){
   const r = s%60;
   return `${m}:${String(r).padStart(2,'0')}`;
 }
+
+// ===== Observateurs: modale liste =====
+function renderSpectatorsModal(){
+  if(!spectatorsListEl) return;
+  spectatorsListEl.innerHTML = '';
+  const list = Array.isArray(spectatorsList) ? spectatorsList : [];
+  if(list.length === 0){
+    const li = document.createElement('li');
+    li.textContent = 'Aucun observateur';
+    spectatorsListEl.appendChild(li);
+    return;
+  }
+  list.forEach(p=>{
+    const li = document.createElement('li');
+    const nm = p && (p.name||p.id) ? String(p.name||p.id) : 'Observateur';
+    li.textContent = nm;
+    spectatorsListEl.appendChild(li);
+  });
+}
+function showSpectatorsModal(){
+  if(!dlgSpectators) return;
+  renderSpectatorsModal();
+  try{ dlgSpectators.showModal(); }catch{}
+}
+if(spectatorsCloseBtn){ spectatorsCloseBtn.addEventListener('click', ()=>{ try{ dlgSpectators && dlgSpectators.close(); }catch{} }); }
 
 // --------- Placement adaptatif du panneau Multijoueur ---------
 function placeMPPanel(){

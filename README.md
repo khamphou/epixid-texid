@@ -1,29 +1,47 @@
-# Tetris Acier/Carbone
+# TEXID — Tetris Acier/Carbone
 
-Un Tetris moderne (HTML5 Canvas + JS) avec thème acier/carbone, score, top 10 (localStorage), vitesse qui augmente toutes les 30s, aperçu de la prochaine pièce et effets audio/visuels lors de la suppression de lignes.
+Tetris moderne (HTML5 Canvas + JS) avec thème acier/carbone, multi temps réel (2 joueurs), support observateurs, top 10, effets audio et HUD soigné.
 
-## Fonctionnalités
+## Objectifs clés
+- Multijoueur stable (2 joueurs), observateurs supportés.
+- Panneaux stats dupliqués (moi/adversaire) avec score/niveau/lignes.
+- Statut prêt affiché avant le nom (✅ prêt, ⌛ pas prêt).
+- Transmission et affichage: level, lines, ready, who.
+- Observateurs: titre cliquable (liste), badge compteur, limite 10 (refus), affichage du gagnant en fin de match.
+- Nettoyage/compaction de `src/main.js`.
+- Afficher aussi les lignes locales dans “Moi” si `#lines` existe.
+- Bannière “En attente d’un joueur…” visible tant que pas d’adversaire ou manche pas démarrée.
+- Uniformisation `server.js` pour messages `scores` (list complet) et `observe_refused`.
 
-## Démarrer
- Lancez le serveur puis l’appli, créez un salon et partagez l’ID. Chaque connexion peut posséder un salon à la fois (l’onglet qui l’a créé peut le fermer). Cliquez sur « Je suis prêt » des deux côtés: le serveur envoie une seed commune pour un ordre de pièces identique (PRNG déterministe, 7-bag).
+## Contrat WebSocket (S=serveur, C=client)
+- C→S hello: `{ type:'hello', name }`
+- S→C joined: `{ type:'joined', room, selfId, started, observer, playersCount, spectatorsCount, owner?, name?, ownerName?, ownerTop? }`
+- S→C names: `{ type:'names', list:[{id,name}] }`
+- S→C peer: `{ type:'peer', connected, who?, name? }`
+- C↔S ready: `C {type:'ready',ready}`, `S {type:'ready',who,ready}`
+- S→C start: `{ type:'start', seed, room }`
+- C→S state: `C { type:'state', grid, score, active:{key,mat,x,y}, level, lines, ready }`
+	- Relai S→C (autres + observateurs): `{ type:'state', who, grid, score, active, level, lines, ready }`
+- S→C scores (périodique/init): `{ type:'scores', list:[{id,name,score,lines,level,ready}] }`
+- C→S/S→C gameover: `C {type:'gameover'}` / `S {type:'gameover',who}`
+- S→C matchover: `{ type:'matchover', scores:[{id,name,score,lines}] }`
+- S→C spectators: `{ type:'spectators', list:[{id,name}] }`
+- S→C observe_refused: `{ type:'observe_refused', room, reason:'full', max:10, spectators }`
 
-- Créer: « Créer partie » (si vous n’êtes pas déjà propriétaire d’un salon)
-- Rejoindre: choisissez un salon dans la liste
-- Prêt: « Je suis prêt » (démarrage quand les 2 sont prêts)
-- Fermer salon: le créateur peut fermer le salon pour tout le monde
-- Résultat: affiché quand les 2 ont terminé
-
-Option B (recommandé) : serveur de dev via Vite
-
-- Le mode Easy favorise fortement les effacements de 3 lignes pour maximiser le score.
-- Deux prochaines pièces sont visibles.
-- Le contour du plateau clignote en situation de stress (pile haute).
+## Démarrage (dev)
+Backend sur 8788 si 8787 occupé:
 ```powershell
 npm install
+$env:PORT='8788'
+npm run server
+```
+Front (Vite) pointant sur ce backend:
+```powershell
+$env:VITE_WS_URL='ws://localhost:8788'
+$env:VITE_API_ORIGIN='http://localhost:8788'
 npm run dev
 ```
-
-Puis ouvrez l’URL affichée.
+Ouvrir l’URL fournie par Vite.
 
 ## Build/Preview
 ```powershell
@@ -32,24 +50,8 @@ npm run preview
 ```
 
 ## Déploiement Netlify
-
-Frontend (Vite) est statique et déployé sur Netlify; le backend WebSocket tourne ailleurs (Render/Railway/Fly.io, etc.).
-
-1. Poussez le repo et créez un site Netlify (New site from Git).
-2. Build command: `npm run build` — Publish directory: `dist`.
-3. Ajoutez la variable d'env `VITE_SERVER_ORIGIN` dans Netlify (Site settings > Build & deploy > Environment) avec l'URL complète de votre backend (sans slash final), par ex:
-	- `https://texid-backend.onrender.com`
-4. Déployez.
-
-Le fichier `netlify.toml` fournit:
-- Un fallback SPA (`/*` -> `/index.html` 200)
-- Des headers cache pour `/assets/*`
-
-### Backend (server.js)
-Ce dépôt contient `server.js` (Express + ws) pour gérer salons, WS, et le Top 10 (persisté dans `leaderboard.json`). Déployez-le sur un PaaS Node avec websockets activés (Render/Railway/Fly.io). Exposez HTTPS et laissez `PORT` fourni par la plateforme (déjà géré).
-
-Ensuite, réglez `VITE_SERVER_ORIGIN` côté Netlify pour pointer sur ce backend.
+Frontend (Vite) statique (dist). Backend WebSocket déployé séparément (Render/Railway/Fly.io). 
+Définir `VITE_SERVER_ORIGIN` côté Netlify vers l’URL HTTPS du backend.
 
 ## Notes
-- Les scores sont stockés dans `localStorage` sous la clé `tetris_top10_v1`.
-- Les assets audio sont synthétisés via WebAudio, pas de fichiers externes.
+- Les assets audio sont générés via WebAudio (AudioFX).

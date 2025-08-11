@@ -442,6 +442,12 @@ wss.on('connection', (ws)=>{
       const r = ws.room && rooms.get(ws.room); if(!r) return;
       const count = Number(msg.count||0);
       for(const c of r.clients){ if(c!==ws){ send(c, { type:'stress', count }); } }
+    } else if(type === 'emote'){
+      // Relais simple d'un emote à l'adversaire
+      const r = ws.room && rooms.get(ws.room); if(!r) return;
+      const emoji = (msg && msg.emoji) ? String(msg.emoji).slice(0,4) : '';
+      if(!emoji) return;
+      for(const c of r.clients){ if(c!==ws){ send(c, { type:'emote', emoji }); } }
     } else if(type === 'name'){
       // set player name and broadcast the list to room
       ws.name = (msg.name||'')+'';

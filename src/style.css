@@ -235,6 +235,71 @@ canvas.fx{position:absolute;left:10px;top:10px;pointer-events:none;mix-blend-mod
 .sidebar .panel h2{font-size:12px}
 /* Unification: mêmes tailles et formats pour tout le texte de la sidebar */
 .sidebar .panel, .sidebar .panel *{font-size:12px; line-height:1.22}
+
+/* Emote bubble: en haut, simple fade-in/out */
+#board-me, #board-opp{position:relative}
+#board-me .frame, #board-opp .frame{position:relative}
+/* Positionner en haut; centrée horizontalement (générique pour tout conteneur) */
+.emote-bubble{position:absolute; left:50%; top:10px; transform: translate(-50%, 0); background: rgba(0,0,0,.55); color:#fff; border:1px solid #1f2937; border-radius:12px; padding:6px 10px; font-size:24px; line-height:1; opacity:0; pointer-events:none; will-change: opacity, transform; z-index: 5}
+.emote-bubble .emoji{display:inline-block; opacity:0}
+/* Durée totale ~2s: 150ms fade-in, 1700ms visible, 150ms fade-out */
+.emote-bubble.show{animation: emoteFadeZoom 2s ease forwards}
+.emote-bubble.show .emoji{animation: emoteFadeOpacity 2s ease forwards}
+/* Fade-in puis fade-out avec zoom x2 vers la fin */
+@keyframes emoteFadeZoom{
+  0%{opacity:0; transform: translate(-50%, 0) scale(1)}
+  10%{opacity:1; transform: translate(-50%, 0) scale(1)}
+  80%{opacity:1; transform: translate(-50%, 0) scale(1.0)}
+  100%{opacity:0; transform: translate(-50%, 0) scale(2)}
+}
+@keyframes emoteFadeOpacity{ 0%{opacity:0} 10%{opacity:1} 80%{opacity:1} 100%{opacity:0} }
+
+/* Mobile: emote plus grande et légèrement plus basse pour la visibilité */
+@media (max-width: 900px){
+  .emote-bubble{ top: 8px; font-size: 40px; padding:10px 14px }
+}
+
+/* Emotes grid */
+.emotes-title{display:flex; align-items:center; justify-content:space-between; gap:8px; margin:0 0 6px}
+.btn.icon{display:inline-flex; align-items:center; justify-content:center; padding:6px; width:26px; height:26px}
+.emotes-top-wrap{display:flex; align-items:center; justify-content:space-between; gap:6px; margin-bottom:6px}
+.emotes-top{display:grid; grid-template-columns: repeat(5, 1fr); gap:6px; flex:1}
+.emotes-top .emote{display:flex; align-items:center; justify-content:center; height:28px; border:1px solid #1f2937; border-radius:8px; background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02)); box-shadow: inset 0 1px 0 rgba(255,255,255,.08); cursor:pointer; font-family: "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji", system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell; color:#fff}
+#emotes-more{display:none}
+.emotes-grid{display:grid; grid-template-columns: repeat(5, 1fr); gap:8px;}
+.emotes-grid .emote{display:flex; align-items:center; justify-content:center; height:34px; border:1px solid #1f2937; border-radius:8px; background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02)); box-shadow: inset 0 1px 0 rgba(255,255,255,.08); cursor:pointer; font-family: "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji", system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell; color:#fff}
+.emotes-grid .emote:hover{border-color:#38bdf8; box-shadow:0 0 0 1px rgba(56,189,248,.2) inset}
+.emotes-grid .emote:active{transform: translateY(1px)}
+.emotes-grid .emote[disabled]{opacity:.45; cursor:not-allowed; filter:grayscale(0.1)}
+/* Badge de décompte sur boutons en cooldown */
+.emotes-grid .emote.cooldown,
+.emotes-top .emote.cooldown{ position:relative }
+.emotes-grid .emote.cooldown::after,
+.emotes-top .emote.cooldown::after{
+  content: attr(data-cd);
+  position:absolute; top:-6px; right:-6px;
+  min-width:18px; height:18px; padding:0 4px;
+  border-radius:999px;
+  background: rgba(15,23,42,.95);
+  color:#eaf6ff;
+  border:1px solid #334155;
+  box-shadow: 0 0 0 2px rgba(0,0,0,.35);
+  font-size:10px; line-height:18px; text-align:center;
+  pointer-events:none;
+}
+/* Cacher les emotes en solo */
+.solo-mode .panel.emotes{ display:none }
+
+/* Mobile: masquer la grille complète par défaut, n'afficher que la rangée Top */
+@media (max-width: 900px){
+  .panel.emotes #emotes-grid{ display:none }
+  .panel.emotes{ position: relative }
+  .panel.emotes.expanded #emotes-grid{ display:grid; position:absolute; right:6px; top:30px; width:min(240px, 82vw); background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02)); border:1px solid #20242c; border-radius:10px; padding:6px; box-shadow:0 20px 80px rgba(0,0,0,.55); transform-origin: top right; animation: emotesPopover .12s ease }
+  @keyframes emotesPopover{ from{ opacity:0; transform: scale(.96)} to{ opacity:1; transform: scale(1)} }
+  #emotes-more{display:inline-flex}
+  /* Top row: 3 items plus icône */
+  .emotes-top{grid-template-columns: repeat(3, 1fr)}
+}
 /* Même taille pour Niveau/Score/Lignes (libellés et valeurs) */
 .status .stat span, .status .stat strong{font-size:13px}
 .status .big strong{font-size:13px; color:#fff; text-shadow:0 2px 12px rgba(56,189,248,.12)}
@@ -376,6 +441,11 @@ canvas.fx{position:absolute;left:10px;top:10px;pointer-events:none;mix-blend-mod
 @media (max-width: 600px){
   #app .layout{grid-template-columns: 1fr max(100px, 26vw); grid-template-areas: "boards sidebar" "under under"; gap:8px; margin-top:8px}
   .panel{padding:6px}
+
+/* Très petits écrans: bulle un peu plus compacte et plus proche du bord */
+@media (max-width: 420px){
+  .emote-bubble{ top:6px; font-size:34px; padding:8px 12px }
+}
   .panel h2{font-size:9px}
   .sidebar .panel, .sidebar .panel *{font-size:8.5px; line-height:1.15}
   /* Uniformiser Score avec Niveau/Lignes */

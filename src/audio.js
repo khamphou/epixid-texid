@@ -45,6 +45,7 @@ export class AudioFX {
     join:  { el: null, src: null, gain: null },
     over:  { el: null, src: null, gain: null },
   impact:{ el: null, src: null, gain: null },
+  emote:{ el: null, src: null, gain: null },
   };
   // Intro écran d'accueil
   this.homeEl = null; this.homeSrc = null; this.homeGain = null;
@@ -281,6 +282,16 @@ export class AudioFX {
     try{ k.el.currentTime = 0; k.el.play(); }catch{}
   }
 
+  // Emote popup sound
+  playEmoteSfx(){
+    let url;
+    try{ url = new URL('../assets/music/sounds/joiner.mp3', import.meta.url).href; }
+    catch{ url = 'assets/music/sounds/joiner.mp3'; }
+    if(!this._ensureSfx('emote', url, 0.24)) return;
+    const k = this._sfx.emote;
+    try{ k.el.currentTime = 0; k.el.play(); }catch{}
+  }
+
   // ------- Intro écran d'accueil -------
   _ensureHomeIntroChain(){
     if(this.homeEl && this.homeSrc && this.homeGain) return true;
@@ -347,6 +358,8 @@ export class AudioFX {
       this._ensureSfx('join', urlJ, 0.26); if(this._sfx.join?.el){ try{ this._sfx.join.el.load(); }catch{} }
       this._ensureSfx('over', urlO, 0.30); if(this._sfx.over?.el){ try{ this._sfx.over.el.load(); }catch{} }
   this._ensureSfx('impact', urlI, 0.26); if(this._sfx.impact?.el){ try{ this._sfx.impact.el.load(); }catch{} }
+  // Emote sfx uses joiner by default
+  this._ensureSfx('emote', urlJ, 0.24); if(this._sfx.emote?.el){ try{ this._sfx.emote.el.load(); }catch{} }
     }catch{}
     return true;
   }

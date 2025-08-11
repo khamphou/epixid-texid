@@ -236,6 +236,30 @@
             <h2>Adversaire</h2>
             <canvas id="opp-mini" width="120" height="240" aria-label="Aperçu adversaire"></canvas>
           </div>
+
+          <div class="panel emotes">
+            <div class="emotes-title">
+              <h2>Emotes</h2>
+              <button id="emotes-more" class="btn icon sm" aria-label="Afficher tous les emotes" title="Afficher tous les emotes" aria-expanded="false" aria-controls="emotes-grid">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></svg>
+              </button>
+            </div>
+            <div class="emotes-top" id="emotes-top" role="list" aria-label="Favoris (les plus utilisés)"></div>
+            <div id="emotes-grid" class="emotes-grid" role="list" aria-label="Réactions (envoyées à l'adversaire)">
+              <!-- Positifs en premier -->
+              <button class="emote emote-pos" data-emote="😜" title="Se moquer" role="listitem">😜</button>
+              <button class="emote emote-pos" data-emote="😂" title="Rigoler" role="listitem">😂</button>
+              <button class="emote emote-pos" data-emote="👏" title="Bravo" role="listitem">👏</button>
+              <button class="emote emote-pos" data-emote="🔥" title="Feu" role="listitem">🔥</button>
+              <!-- Négatifs ensuite -->
+              <button class="emote emote-neg" data-emote="😭" title="Pleurer" role="listitem">😭</button>
+              <button class="emote emote-neg" data-emote="😴" title="Dormir" role="listitem">😴</button>
+              <button class="emote emote-neg" data-emote="😠" title="Énervé" role="listitem">😠</button>
+              <button class="emote emote-neg" data-emote="😡" title="Colère" role="listitem">😡</button>
+              <button class="emote emote-neg" data-emote="🤡" title="Se moquer+" role="listitem">🤡</button>
+              <button class="emote emote-neg" data-emote="💤" title="Zzz" role="listitem">💤</button>
+            </div>
+          </div>
         </aside>
         <!-- Panneaux sous le plateau (mobile): statut + multijoueur -->
         <section id="under-panels" class="under-panels"></section>

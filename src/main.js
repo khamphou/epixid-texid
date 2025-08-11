@@ -223,6 +223,10 @@ const roomTag = document.getElementById('room-tag');
 const roomIdEl = document.getElementById('room-id');
 const toastEl = document.getElementById('toast');
 const panelMP = document.getElementById('panel-mp');
+// Emotes UI
+const emotesGridEl = document.getElementById('emotes-grid');
+const emotesTopEl = document.getElementById('emotes-top');
+const emotesMoreBtn = document.getElementById('emotes-more');
 
 const fx = new AudioFX();
 // Ne pas précharger ni démarrer l'audio avant un geste utilisateur (réduit les warnings autoplay)
@@ -301,6 +305,155 @@ let inviteToastShown = false;
 let _toastTO = null;
 // Rejouer: préserver Easy pour la toute prochaine partie uniquement
 let nextStartPreserveEasy = false;
+// Anti-flood emotes: max 3 / 10s
+const EMOTE_WINDOW_MS = 10000;
+const EMOTE_MAX_IN_WINDOW = 3;
+let emoteSendTimes = [];
+let emoteCooldownTO = null;
+let emoteCdTicker = null; // interval pour MAJ visuelle du décompte sur boutons
+function emoteCanSend(){
+  const now = Date.now();
+  emoteSendTimes = emoteSendTimes.filter(t=> now - t < EMOTE_WINDOW_MS);
+  return emoteSendTimes.length < EMOTE_MAX_IN_WINDOW;
+}
+function emoteNoteSend(){
+  const now = Date.now();
+  emoteSendTimes.push(now);
+}
+function emoteCooldownLeft(){
+  const now = Date.now();
+  emoteSendTimes = emoteSendTimes.filter(t=> now - t < EMOTE_WINDOW_MS);
+  if(emoteSendTimes.length < EMOTE_MAX_IN_WINDOW) return 0;
+  const first = emoteSendTimes[0];
+  return Math.max(0, EMOTE_WINDOW_MS - (now - first));
+}
+function setEmotesDisabled(dis){
+  try{
+    if(!emotesGridEl) return;
+    const btns = emotesGridEl.querySelectorAll('.emote');
+    btns.forEach(b=> dis ? b.setAttribute('disabled','') : b.removeAttribute('disabled'));
+    if(emotesTopEl){ emotesTopEl.querySelectorAll('.emote').forEach(b=> dis ? b.setAttribute('disabled','') : b.removeAttribute('disabled')); }
+  }catch{}
+}
+
+// Démarre/rafraîchit le timer de cooldown UI quand la limite est atteinte
+function startEmoteCooldownTimer(){
+  try{
+    const left = emoteCooldownLeft();
+    setEmotesDisabled(true);
+    clearTimeout(emoteCooldownTO);
+    // Démarrer/rafraîchir l'affichage du décompte sur les boutons
+    startEmoteCooldownVisual();
+    emoteCooldownTO = setTimeout(()=>{
+      setEmotesDisabled(false);
+      stopEmoteCooldownVisual();
+      try{ updateEmotesEnabled(); }catch{}
+    }, Math.max(500, left));
+  }catch{}
+}
+
+// Décompte visuel: ajoute data-cd et classe .cooldown sur chaque bouton
+function startEmoteCooldownVisual(){
+  try{
+    stopEmoteCooldownVisual();
+    const tick = ()=>{
+      const ms = emoteCooldownLeft();
+      const secs = Math.ceil(ms/1000);
+      const label = secs > 0 ? String(secs) : '';
+      const apply = (btn)=>{
+        if(!btn) return;
+        if(label){
+          btn.classList.add('cooldown');
+          btn.setAttribute('data-cd', label);
+        } else {
+          btn.classList.remove('cooldown');
+          btn.removeAttribute('data-cd');
+        }
+      };
+      try{
+        if(emotesGridEl){ emotesGridEl.querySelectorAll('.emote').forEach(apply); }
+        if(emotesTopEl){ emotesTopEl.querySelectorAll('.emote').forEach(apply); }
+      }catch{}
+      if(!label){ stopEmoteCooldownVisual(); }
+    };
+    // Premier tick immédiat puis chaque 200ms pour fluidité
+    tick();
+    emoteCdTicker = setInterval(tick, 200);
+  }catch{}
+}
+function stopEmoteCooldownVisual(){
+  try{ if(emoteCdTicker){ clearInterval(emoteCdTicker); emoteCdTicker=null; } }catch{}
+  try{
+    const clearBtn = (btn)=>{ btn.classList.remove('cooldown'); btn.removeAttribute('data-cd'); };
+    if(emotesGridEl){ emotesGridEl.querySelectorAll('.emote').forEach(clearBtn); }
+    if(emotesTopEl){ emotesTopEl.querySelectorAll('.emote').forEach(clearBtn); }
+  }catch{}
+}
+
+// Usage tracking to populate Top row (persist in localStorage)
+const EMOTE_USE_KEY = 'tetris_emotes_usage_v1';
+function loadEmoteUsage(){
+  try{ return JSON.parse(localStorage.getItem(EMOTE_USE_KEY)||'{}')||{}; }catch{ return {}; }
+}
+function saveEmoteUsage(map){ try{ localStorage.setItem(EMOTE_USE_KEY, JSON.stringify(map)); }catch{} }
+function bumpEmoteUsage(emo){ const map = loadEmoteUsage(); map[emo] = (map[emo]||0)+1; saveEmoteUsage(map); renderTopEmotes(); }
+function renderTopEmotes(){
+  try{
+    if(!emotesTopEl || !emotesGridEl) return;
+  // Desktop: pas de Top 3, laisser vide pour n'afficher que la grille complète
+  if(!matchMedia('(max-width: 900px)').matches){ emotesTopEl.innerHTML=''; return; }
+  const all = Array.from(emotesGridEl.querySelectorAll('.emote')).map(b=>({ emo:b.getAttribute('data-emote'), title:b.title||'', aria:b.getAttribute('role')||'listitem' }));
+    const usage = loadEmoteUsage();
+  const sorted = all.sort((a,b)=> (usage[b.emo]||0) - (usage[a.emo]||0));
+  const top = sorted.slice(0,3);
+    emotesTopEl.innerHTML = '';
+    top.forEach(it=>{
+      const btn = document.createElement('button');
+      btn.className = 'emote';
+      btn.setAttribute('data-emote', it.emo);
+      btn.setAttribute('title', it.title);
+      btn.setAttribute('role','listitem');
+      btn.textContent = it.emo;
+      emotesTopEl.appendChild(btn);
+    });
+  // Répercuter l’état de cooldown sur les favoris nouvellement rendus
+  try{ updateEmotesEnabled(); }catch{}
+  }catch{}
+}
+
+function showEmoteBubbleOn(boardWrapId, emo, withSound){
+  try{
+  let wrap = document.getElementById(boardWrapId);
+  if(!wrap) return;
+  // Si la cible est masquée (mobile cache #board-opp), basculer sur la mini preview adversaire
+  try{
+    const cs = getComputedStyle(wrap);
+    const hidden = cs.display==='none' || wrap.offsetParent===null;
+    if(hidden){
+      const alt = document.querySelector('.panel.opp-preview');
+      if(alt) wrap = alt;
+    }
+  }catch{}
+  const frame = wrap.querySelector('.frame') || wrap;
+    let bubble = frame.querySelector('.emote-bubble');
+    if(!bubble){
+      bubble = document.createElement('div');
+      bubble.className = 'emote-bubble';
+      bubble.setAttribute('aria-live','polite');
+      frame.appendChild(bubble);
+    }
+    // Fill content
+    bubble.innerHTML = '';
+    const em = document.createElement('span'); em.className='emoji'; em.textContent = emo; bubble.appendChild(em);
+    // reset anim
+    bubble.classList.remove('show'); void bubble.offsetWidth; bubble.classList.add('show');
+    // Son désactivé pour l’instant
+    // if(withSound === true){ try{ fx.playEmoteSfx?.(); }catch{} }
+    clearTimeout(bubble._t);
+    // Durée totale ~2s: fade-in court, maintien bref, fade-out court
+    bubble._t = setTimeout(()=>{ bubble && bubble.classList.remove('show'); }, 2000);
+  }catch{}
+}
 
 function resetGrid(){
   grid = Array.from({length:ROWS},()=>Array(COLS).fill(null));
@@ -452,11 +605,12 @@ function hardDrop(){
 function step(ts){
   if(!running||paused) return;
   if(!lastSpeedup) lastSpeedup = ts;
+  const hasActive = !!active;
 
   // chute
   if(!step.last) step.last = ts;
   const elapsed = ts - step.last;
-  if(elapsed >= speedMs){ softDrop(); step.last = ts; }
+  if(hasActive && elapsed >= speedMs){ softDrop(); step.last = ts; }
 
   // accélération toutes les 30s
   if(ts - lastSpeedup >= SPEEDUP_EVERY_MS){
@@ -469,10 +623,12 @@ function step(ts){
     updateHUD();
   }
 
-  // auto-repeat horizontal
-  handleHorizontal(ts);
-  // auto-repeat vertical (soft drop maintenu)
-  handleVertical(ts);
+  // auto-repeat horizontal/vertical uniquement si une pièce est active
+  if(hasActive){
+    handleHorizontal(ts);
+    // auto-repeat vertical (soft drop maintenu)
+    handleVertical(ts);
+  }
 
   draw();
   // adapter musique si la pile évolue
@@ -523,7 +679,8 @@ function draw(){
     }
   }
   // pièce active (avec effet d'apparition au spawn)
-  if(!(roomId && !mpStarted)){
+  const canShowActive = !!active && !(roomId && !mpStarted);
+  if(canShowActive){
     const now = performance.now();
     const spElapsed = now - (spawnFxStart||0);
     const showSpawn = spElapsed >= 0 && spElapsed < spawnFxDur;
@@ -537,8 +694,8 @@ function draw(){
   }
 
     // Ombre projetée (ghost) + guides (Easy uniquement)
-  const landing = getLandingY(x, y, active.mat);
-  if(!(roomId && !mpStarted)){
+  if(canShowActive){
+    const landing = getLandingY(x, y, active.mat);
     drawGhost(x, landing, active);
     if(easyMode){
       drawLandingVerticals(x, landing, active.mat);
@@ -547,9 +704,9 @@ function draw(){
   }
 
     // Effet arcs lumineux si rotation récente
-    const now = performance.now();
-    const elapsed = now - (rotFxStart||0);
-    if(elapsed >= 0 && elapsed < rotFxDur){
+  const now = performance.now();
+  const elapsed = now - (rotFxStart||0);
+  if(canShowActive && elapsed >= 0 && elapsed < rotFxDur){
       const t = 1 - (elapsed/rotFxDur);
       const ang = t * Math.PI * 2; // rotation rapide
   const { cx, cy } = getActiveCenterOfMass();
@@ -567,7 +724,7 @@ function draw(){
     }
 
   // Hint (Mode Easy)
-  if(easyMode && hint){
+  if(canShowActive && easyMode && hint){
     drawHint(hint);
   }
   // overlay Game Over pour nous si perdu
@@ -936,57 +1093,30 @@ function start(){
   score = 0; level = 1; speedMs = START_SPEED_MS; lastSpeedup = 0; step.last = 0;
   selfDead = false; opponentDead = false; opponentActive = null;
   gameStartAt = performance.now();
-  // Easy mode policy: OFF par défaut à chaque nouvelle partie,
-  // sauf si on vient de cliquer "Rejouer" (préservation 1 coup)
+  // Politique Boost (Easy):
+  // - En solo: OFF par défaut à chaque nouvelle partie, sauf "Rejouer" (préservation 1 coup)
+  // - En multi: ne pas reset ici; le reset se fait à l'entrée dans le salon (création/join)
   try{
     const easyBtnEl = document.getElementById('easy-btn');
     const aiDD = document.getElementById('ai-dd');
-    if(!nextStartPreserveEasy){
-      easyMode = false; hint = null;
-      // UI bouton
-      if(easyBtnEl){
-        easyBtnEl.setAttribute('aria-pressed','false');
-        easyBtnEl.classList.remove('active','easy-conservateur','easy-equilibre','easy-agressif');
-      }
-      // Menu: cocher Off par défaut
-      if(aiDD){
-        aiDD.querySelectorAll('.ai-opt').forEach(b=>{
-          const v = b.getAttribute('data-value');
-          b.setAttribute('aria-checked', v==='off' ? 'true' : 'false');
-        });
-      }
-    }
-  }catch{}
-  nextStartPreserveEasy = false;
-  // Règle solo: Easy désactivé, sauf si le joueur s'appelle "kham" (alors l'activer)
-  try{
     if(!roomId){
-      const isKham = (playerName||'').trim().toLowerCase() === 'kham';
-      const easyBtnEl = document.getElementById('easy-btn');
-      const aiDD = document.getElementById('ai-dd');
-      if(isKham){
-        easyMode = true;
-        if(!aiProfile) aiProfile = 'equilibre';
-        // Synchroniser l'UI bouton
+      if(!nextStartPreserveEasy){
+        easyMode = false; hint = null;
         if(easyBtnEl){
-          easyBtnEl.setAttribute('aria-pressed','true');
-          easyBtnEl.classList.add('active');
-          easyBtnEl.classList.remove('easy-prudent','easy-conservateur','easy-equilibre','easy-agressif');
-          if(aiProfile==='prudent') easyBtnEl.classList.add('easy-prudent');
-          else if(aiProfile==='conservateur') easyBtnEl.classList.add('easy-conservateur');
-          else if(aiProfile==='agressif') easyBtnEl.classList.add('easy-agressif');
-          else easyBtnEl.classList.add('easy-equilibre');
+          easyBtnEl.setAttribute('aria-pressed','false');
+          easyBtnEl.classList.remove('active','easy-conservateur','easy-equilibre','easy-agressif');
         }
-        // Menu: cocher le profil courant (par défaut équilibré)
         if(aiDD){
           aiDD.querySelectorAll('.ai-opt').forEach(b=>{
             const v = b.getAttribute('data-value');
-            b.setAttribute('aria-checked', v===aiProfile ? 'true' : 'false');
+            b.setAttribute('aria-checked', v==='off' ? 'true' : 'false');
           });
         }
       }
     }
   }catch{}
+  nextStartPreserveEasy = false;
+  // Easy reste OFF par défaut (sauf si "Rejouer" demande la préservation via nextStartPreserveEasy)
   resetGrid(); nextQueue = []; bag = [];
   // préparer l’aperçu mais ne pas afficher d’actif si en multi avant start
   if(roomId){
@@ -1572,7 +1702,7 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
   // Afficher le bandeau d'attente uniquement si l'adversaire n'est pas connecté
   showWaiting(!peerConnected);
   // marquer prêt côté UI
-  myReady = true; updateReadyBadges();
+  myReady = true; updateReadyBadges(); updateStartButtonLabel();
         // marquer prêt/relancer côté serveur
         try{
           if(ws && ws.readyState===1){ ws.send(JSON.stringify({ type:'replay', room: roomId })); }
@@ -1617,6 +1747,99 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
 
   // Lever le verrou scroll après premier fit/draw
   try{ setTimeout(()=>{ document.documentElement.classList.remove('init-lock'); document.body.classList.remove('init-lock'); }, 60); }catch{}
+
+  // Événements Emotes (sidebar)
+  try{
+    const grid = emotesGridEl;
+    if(grid){
+      // Réordonner: positifs en haut (DOM) puis négatifs
+      try{
+        const pos = Array.from(grid.querySelectorAll('.emote-pos'));
+        const neg = Array.from(grid.querySelectorAll('.emote-neg'));
+        [...pos, ...neg].forEach(b=> grid.appendChild(b));
+      }catch{}
+  grid.addEventListener('click', (e)=>{
+        const btn = e.target && e.target.closest ? e.target.closest('.emote') : null;
+        if(!btn) return;
+        const emo = btn.getAttribute('data-emote');
+        if(!emo) return;
+  // anti-flood s'applique dans tous les modes
+  // anti-flood
+  if(!emoteCanSend()){
+    // désactiver pendant le cooldown restant
+    const left = emoteCooldownLeft();
+    setEmotesDisabled(true);
+    clearTimeout(emoteCooldownTO);
+  startEmoteCooldownVisual();
+  emoteCooldownTO = setTimeout(()=>{ setEmotesDisabled(false); stopEmoteCooldownVisual(); updateEmotesEnabled(); }, Math.max(500, left));
+    return;
+  }
+  // envoyer (si multi en partie) et compter usage dans tous les cas
+  try{ if(roomId && mpStarted){ mpSend({ type:'emote', emoji: emo }); }
+          emoteNoteSend(); bumpEmoteUsage(emo);
+        }catch{}
+  // Si on vient d'atteindre la limite, déclencher le verrou UI proactif
+  if(!emoteCanSend()){
+  startEmoteCooldownTimer();
+  } else {
+    try{ updateEmotesEnabled(); }catch{}
+  }
+  // feedback local léger (flash du bouton) — aucun affichage sur nos plateaux
+  btn.classList.add('active'); setTimeout(()=>btn.classList.remove('active'), 120);
+        // En mobile: refermer la grille pour ne laisser que Top
+        try{
+          if(matchMedia('(max-width: 900px)').matches){
+            const panel = btn.closest('.panel.emotes');
+            if(panel){ panel.classList.remove('expanded'); emotesMoreBtn?.setAttribute('aria-expanded','false'); }
+          }
+        }catch{}
+      });
+    }
+    // clicks on Top row
+    if(emotesTopEl){
+      emotesTopEl.addEventListener('click', (e)=>{
+        const btn = e.target && e.target.closest ? e.target.closest('.emote') : null;
+        if(!btn) return;
+        const emo = btn.getAttribute('data-emote');
+        if(!emo) return;
+        if(!emoteCanSend()){
+          const left = emoteCooldownLeft();
+          setEmotesDisabled(true);
+          clearTimeout(emoteCooldownTO);
+          startEmoteCooldownVisual();
+          emoteCooldownTO = setTimeout(()=>{ setEmotesDisabled(false); stopEmoteCooldownVisual(); updateEmotesEnabled(); }, Math.max(500, left));
+          return;
+        }
+  try{ if(roomId && mpStarted){ mpSend({ type:'emote', emoji: emo }); }
+          emoteNoteSend(); bumpEmoteUsage(emo);
+        }catch{}
+  if(!emoteCanSend()){
+  startEmoteCooldownTimer();
+  } else {
+    try{ updateEmotesEnabled(); }catch{}
+  }
+  btn.classList.add('active'); setTimeout(()=>btn.classList.remove('active'), 120);
+        try{
+          if(matchMedia('(max-width: 900px)').matches){
+            const panel = btn.closest('.panel.emotes');
+            if(panel){ panel.classList.remove('expanded'); emotesMoreBtn?.setAttribute('aria-expanded','false'); }
+          }
+        }catch{}
+      });
+    }
+    // toggle "Plus" to expand grid on mobile
+    if(emotesMoreBtn){
+      emotesMoreBtn.addEventListener('click', ()=>{
+        const panel = emotesMoreBtn.closest('.panel.emotes');
+        if(!panel) return;
+        const expanded = panel.classList.toggle('expanded');
+        emotesMoreBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        emotesMoreBtn.textContent = expanded ? 'Moins' : 'Plus';
+      });
+    }
+    // initial populate
+    renderTopEmotes();
+  }catch{}
 })();
 
 
@@ -1687,7 +1910,10 @@ function connectWS(){
   if(wsConnecting) return; wsConnecting = true;
   try{
     const httpOrigin = getServerOrigin();
-    const wsUrl = httpOrigin.replace(/^http(s?):\/\//i, 'ws$1://');
+    // En dev, getServerOrigin() renvoie '' (proxy HTTP via Vite). Pour WS, se connecter en direct au serveur MP.
+    const wsUrl = httpOrigin
+      ? httpOrigin.replace(/^http(s?):\/\//i, 'ws$1://')
+      : `ws://${location.hostname}:8787`;
     ws = new WebSocket(wsUrl);
     ws.onopen = ()=>{
       // envoyer le nom et démarrer le heartbeat
@@ -1730,11 +1956,27 @@ function connectWS(){
           selfDead=false; opponentDead=false; opponentActive=null; mpStarted=false; serverCountdownActive=false;
           score=0; opponentScore=0; elScore && (elScore.textContent='0'); oppScoreEl && (oppScoreEl.textContent='0');
           myWins=0; oppWins=0; meScoreEl && (meScoreEl.textContent='0'); oppScoreEl && (oppScoreEl.textContent='0');
+          // Multi: à l'entrée dans le salon (création/join), on réinitialise le mode Boost
+          try{
+            const easyBtnEl = document.getElementById('easy-btn');
+            const aiDD = document.getElementById('ai-dd');
+            easyMode = false; hint = null;
+            if(easyBtnEl){
+              easyBtnEl.setAttribute('aria-pressed','false');
+              easyBtnEl.classList.remove('active','easy-conservateur','easy-equilibre','easy-agressif');
+            }
+            if(aiDD){
+              aiDD.querySelectorAll('.ai-opt').forEach(b=>{
+                const v = b.getAttribute('data-value');
+                b.setAttribute('aria-checked', v==='off' ? 'true' : 'false');
+              });
+            }
+          }catch{}
           myReady = !!isOwner; // l'hôte est prêt par défaut (miroir du serveur)
           peerReady=false; updateReadyBadges();
           // nom de l’adversaire si on n’est pas l’hôte
           if(!isOwner && roomMeta.ownerName){ const el= document.getElementById('opp-label'); if(el) el.textContent = roomMeta.ownerName; }
-          updateOwnerUI(); updateStartButtonLabel(); showGame(); showWaiting(!peerConnected); updateOpponentVisibility(); renderPlayersList();
+          updateOwnerUI(); updateStartButtonLabel(); showGame(); showWaiting(!peerConnected); updateOpponentVisibility(); renderPlayersList(); try{ updateEmotesEnabled(); }catch{}
           try{ updateInputLock(); }catch{}
           // Si je suis hôte et prêt par défaut, envoyer l'état au serveur
           if(isOwner){ try{ ws && ws.readyState===1 && ws.send(JSON.stringify({type:'ready', ready:true})); }catch{} }
@@ -1760,13 +2002,18 @@ function connectWS(){
           if(other && typeof other.score==='number'){ opponentScore = other.score; }
           updateScoreLabels(); updateHUD(); renderPlayersList();
         } break;
+        case 'emote': {
+          // Le receveur voit l'emote au-dessus de son propre plateau (board-me), aucun son
+          const emo = (msg && msg.emoji) ? String(msg.emoji) : '';
+          if(emo){ showEmoteBubbleOn('board-me', emo, false); }
+        } break;
         case 'peer': {
           const was = !!peerConnected;
           peerConnected = !!msg.connected;
       if(peerConnected){
             try{ fx.playJoinerSfx(); }catch{}
             showWaiting(false);
-            try{ updateInputLock(); }catch{}
+            try{ updateInputLock(); }catch{} try{ updateEmotesEnabled(); }catch{}
             // Annonce d'arrivée quand un joueur rejoint une partie ouverte
             if(!was){
               const nm = (msg && msg.name) || 'Un joueur';
@@ -1774,7 +2021,7 @@ function connectWS(){
             }
           } else {
             // l'autre joueur est absent. Ne pas écraser mon état "Prêt" (ex: hôte prêt par défaut)
-            peerReady=false; updateReadyBadges(); showWaiting(true);
+            peerReady=false; updateReadyBadges(); showWaiting(true); try{ updateEmotesEnabled(); }catch{}
             if(mpStarted){
               mpStarted = false; selfDead = false; opponentDead = false; opponentActive = null;
               running = false; paused = false; fx.stopMusic();
@@ -2161,8 +2408,6 @@ function onMatchStart(seedStr){
   seed = seedStr || (Date.now()+':'+Math.random());
   rng = mulberry32(hashSeed(seed));
   mpStarted = true;
-  // Multi: si ce départ n'est pas un "rejouer" explicite, remettre Easy à OFF
-  if(!nextStartPreserveEasy){ try{ const easyBtnEl = document.getElementById('easy-btn'); if(easyBtnEl){ easyBtnEl.setAttribute('aria-pressed','false'); easyBtnEl.classList.remove('active','easy-conservateur','easy-equilibre','easy-agressif'); } const aiDD = document.getElementById('ai-dd'); if(aiDD){ aiDD.querySelectorAll('.ai-opt').forEach(b=>{ const v = b.getAttribute('data-value'); b.setAttribute('aria-checked', v==='off' ? 'true' : 'false'); }); } easyMode=false; hint=null; }catch{} }
   score = 0; opponentScore = 0; elScore && (elScore.textContent='0');
   updateScoreLabels();
   bag = []; nextQueue = [];
@@ -2177,6 +2422,7 @@ function onMatchStart(seedStr){
   updateStartButtonLabel();
   inviteToastShown = true; // plus d'invite pendant la manche
   try{ updateInputLock(); }catch{}
+  try{ updateEmotesEnabled(); }catch{}
 }
 
 function onMatchOver(scores){
@@ -2202,8 +2448,20 @@ function onMatchOver(scores){
   if(verdict==='Victoire') myWins++; else if(verdict==='Défaite') oppWins++;
   updateScoreLabels();
   try{ updateInputLock(); }catch{}
+  try{ updateEmotesEnabled(); }catch{}
   // autoriser une future invite
   inviteToastShown = false;
+}
+
+function updateEmotesEnabled(){
+  try{
+  const grid = document.getElementById('emotes-grid');
+  if(!grid) return;
+  const enable = emoteCanSend();
+  const set = (btn)=>{ if(enable){ btn.removeAttribute('disabled'); } else { btn.setAttribute('disabled',''); } };
+  grid.querySelectorAll('.emote').forEach(set);
+  if(emotesTopEl){ emotesTopEl.querySelectorAll('.emote').forEach(set); }
+  }catch{}
 }
 // références doublons supprimées (gérées au début du fichier et dans init())
 

@@ -1,5 +1,7 @@
 import { Config } from '../core/config.js';
 import { modeFactory } from '../modes/modeFactory.js';
+import { SoloScreen } from './SoloScreen.js';
+import { TrainingScreen } from './TrainingScreen.js';
 
 export class HomeScreen{
   constructor(core){
@@ -28,6 +30,13 @@ export class HomeScreen{
         <p>Le plateau final (UI/skins) sera aligné avec la version legacy.</p>
         <p style="opacity:.7">Echap pour fermer</p>`;
       this.core.root.appendChild(this.drawer);
+    }
+    const btnTraining = document.getElementById('btn-training');
+    if(btnTraining){
+      btnTraining.addEventListener('click', ()=>{
+        // Utiliser le lanceur standard pour charger des règles valides
+        this._launchTraining('daily_tspin_rush');
+      });
     }
   }
   update(){}
@@ -66,7 +75,16 @@ export class HomeScreen{
     ctx.fillText('↑/↓ naviguer, Entrée valider, C crédits', x, y0+this.items.length*lh + 20);
   }
   handleInput(){ }
-  dispose(){ if(!this.domHome){ window.removeEventListener('keydown', this._onKey); this.drawer?.remove?.(); } }
+  dispose(){ 
+    if(!this.domHome){ 
+      window.removeEventListener('keydown', this._onKey); 
+      this.drawer?.remove?.(); 
+    }
+    const btnTraining = document.getElementById('btn-training');
+    if(btnTraining){
+      // remove listeners if needed
+    }
+  }
   async _launchSolo(modeId='br10'){
     try{
       const { rules, objectives } = await this.core.loadMode(modeId, { multiplayer:false });
@@ -90,9 +108,26 @@ export class HomeScreen{
     else if(e.key==='Enter'){
       const sel=this.items[this.idx];
       if(sel.key==='solo') return this._launchSolo(Config.defaultMode);
-      if(sel.key==='training') return this._launchSolo('daily_tspin_rush');
+      if(sel.key==='training') return this._launchTraining('daily_tspin_rush');
       if(sel.key==='multi') return this._launchMulti();
       if(sel.key==='credits') return this._toggleCredits(true);
+    }
+  }
+  async _launchTraining(modeId='daily_tspin_rush'){
+    try{
+      const { rules, objectives } = await this.core.loadMode(modeId, { multiplayer:false });
+      this.core.sm.replace(new TrainingScreen(this.core, { rules, objectives }));
+      try{ document.getElementById('topbar')?.classList.remove('hidden'); }catch{}
+    }catch(err){
+      // Fallback: même config que _launchSolo mais avec TrainingScreen
+      const fallbackCfg={ id:'local_training',version:1,title:'Training (local)',description:'Mode entraînement',visibility:'public',mode:'solo',
+        lobby:{minPlayers:1,maxPlayers:1,seedPolicy:'perPlayer'},
+        rules:{ attackTable:{single:0,double:1,triple:2,tetris:4,tspin:{single:2,double:4,triple:6},backToBackBonus:1,comboTable:[0,1,1,2,2,3,3,4,4,5]},
+          garbage:{delayMs:600,telegraphMs:600,messiness:0.35,cancelPolicy:'net'}, speed:{lockDelayMs:500, gravityCurve:[{t:0,gravity:1}]}, inputs:{dasMs:110,arrMs:10,allow180:true,allowHold:true,holdConsumesLock:true}, badges:{enabled:false,perKOPercent:0,maxStacks:0}},
+        objectives:{winCondition:'first_to_objectives',targets:{survive:{seconds:9999}}}, leaderboard:{scope:'none',scoring:'score'} };
+      const { rules, objectives } = modeFactory.fromConfig(fallbackCfg);
+      this.core.sm.replace(new TrainingScreen(this.core, { rules, objectives }));
+      try{ document.getElementById('topbar')?.classList.remove('hidden'); }catch{}
     }
   }
   async _launchMulti(){

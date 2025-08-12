@@ -245,6 +245,8 @@ const screenJoin = document.getElementById('screen-join');
 const screenGame = document.getElementById('app');
 const btnStartSolo = document.getElementById('btn-start-solo');
 const btnStartMulti = document.getElementById('btn-start-multi');
+const btnStartTraining = document.getElementById('btn-start-training');
+const btnTrainingAlias = document.getElementById('btn-training');
 const btnJoinRefresh = document.getElementById('btn-join-refresh');
 const btnJoinBack = document.getElementById('btn-join-back');
 const btnJoinCreate = document.getElementById('btn-join-create');
@@ -405,6 +407,7 @@ let inviteToastShown = false;
 let _toastTO = null;
 // Rejouer: préserver Easy pour la toute prochaine partie uniquement
 let nextStartPreserveEasy = false;
+let isTraining = false; // true uniquement pour les parties Training (affiche le bouton Easy)
 // Anti-flood emotes: max 3 / 10s
 const EMOTE_WINDOW_MS = 10000;
 const EMOTE_MAX_IN_WINDOW = 3;
@@ -1745,6 +1748,8 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
   // Toggle Mode Easy via bouton (plus de checkbox)
   const easyBtn = document.getElementById('easy-btn');
   const aiDD = document.getElementById('ai-dd');
+  const aiPowerBtn = document.getElementById('ai-power-btn');
+  const aiPowerDD = document.getElementById('ai-power-dd');
   if(easyBtn && aiDD){
   // OFF par défaut
   easyMode = false;
@@ -1810,14 +1815,95 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
       }
       ddOpen=false; closeDD();
     });
+    // Afficher/Masquer le bouton Easy selon le mode
+    const updateEasyVisible = (show)=>{
+      try{
+        if(!easyBtn) return;
+        if(show){ easyBtn.classList.remove('hidden'); }
+        else {
+          easyBtn.classList.add('hidden');
+          closeDD();
+        }
+      }catch{}
+    };
+    // Expose helper pour d'autres handlers
+    window.__updateEasyVisible = updateEasyVisible;
+    // Helper: activer/afficher le bouton Easy avec le profil par défaut pour le Training
+    window.__syncEasyTrainingUI = ()=>{
+      try{
+        updateEasyVisible(true);
+        easyMode = true;
+        if(!aiProfile) aiProfile = 'equilibre';
+        easyBtn.setAttribute('aria-pressed','true');
+        easyBtn.classList.add('active');
+        easyBtn.classList.remove('easy-prudent','easy-conservateur','easy-agressif');
+        easyBtn.classList.add('easy-equilibre');
+        // cocher "Équilibré" dans le menu
+        aiDD.querySelectorAll('.ai-opt').forEach(b=>{
+          const v = b.getAttribute('data-value');
+          b.setAttribute('aria-checked', v==='equilibre' ? 'true' : 'false');
+        });
+      }catch{}
+    };
   const repositionIfOpen = ()=>{ if(!aiDD.classList.contains('hidden')) positionDropdown(); };
   window.addEventListener('resize', repositionIfOpen);
   window.addEventListener('scroll', repositionIfOpen, { passive:true });
   if(window.visualViewport){ window.visualViewport.addEventListener('resize', repositionIfOpen); window.visualViewport.addEventListener('scroll', repositionIfOpen); }
   }
+  // Bouton IA (Training only): visible après le bouton Nouvelle partie
+  if(aiPowerBtn && aiPowerDD){
+    // Masqué par défaut, visible en Training uniquement via helper
+    const openDD2 = ()=>{ aiPowerDD.classList.remove('hidden'); aiPowerBtn.setAttribute('aria-expanded','true'); positionDropdown2(); };
+    const closeDD2 = ()=>{ aiPowerDD.classList.add('hidden'); aiPowerBtn.setAttribute('aria-expanded','false'); };
+    let dd2Open=false;
+    function positionDropdown2(){
+      try{
+        const r = aiPowerBtn.getBoundingClientRect();
+        const topbar = document.querySelector('.topbar');
+        const pr = topbar ? topbar.getBoundingClientRect() : { left:0, top:0 };
+        const wasHidden = aiPowerDD.classList.contains('hidden');
+        if(wasHidden){ aiPowerDD.style.visibility='hidden'; aiPowerDD.classList.remove('hidden'); }
+        const menuW = aiPowerDD.offsetWidth;
+        if(wasHidden){ aiPowerDD.classList.add('hidden'); aiPowerDD.style.visibility=''; }
+        let left = Math.round(r.right - pr.left - menuW);
+        const maxLeft = Math.max(0, Math.floor((pr.left + (topbar?.clientWidth||window.innerWidth)) - pr.left - menuW - 8));
+        if(left < 8) left = 8; if(left > maxLeft) left = maxLeft;
+        aiPowerDD.style.left = left + 'px';
+        aiPowerDD.style.top = Math.round(r.bottom - pr.top) + 'px';
+      }catch{}
+    }
+    aiPowerBtn.addEventListener('click', (e)=>{ e.stopPropagation(); dd2Open=!dd2Open; if(dd2Open) openDD2(); else closeDD2(); });
+    document.addEventListener('click', (e)=>{ if(aiPowerDD.classList.contains('hidden')) return; if(!aiPowerDD.contains(e.target) && e.target!==aiPowerBtn){ dd2Open=false; closeDD2(); } });
+    document.addEventListener('keydown', (e)=>{ if(e.key==='Escape'){ dd2Open=false; closeDD2(); }});
+    // Sélection d'option (reutilise easyMode/aiProfile + computeHint)
+    aiPowerDD.addEventListener('click', (ev)=>{
+      const btn = ev.target && ev.target.closest('.ai-opt'); if(!btn) return;
+      const val = btn.getAttribute('data-value');
+      aiPowerDD.querySelectorAll('.ai-opt').forEach(b=> b.setAttribute('aria-checked', b===btn ? 'true' : 'false'));
+      if(val==='off'){ easyMode=false; hint=null; try{ window.__syncEasyTrainingUI?.(); }catch{} }
+      else {
+        aiProfile = val||'equilibre';
+        easyMode = true;
+        try{ computeHint(); }catch{}
+        try{ window.__syncEasyTrainingUI?.(); }catch{}
+      }
+      dd2Open=false; closeDD2();
+    });
+    // Helper pour visibilité Training-only
+    window.__updateAIPowerVisible = (show)=>{ try{ aiPowerBtn.classList.toggle('hidden', !show); if(!show) closeDD2(); }catch{} };
+  }
   // Navigation écrans
-  if(btnStartSolo){ btnStartSolo.addEventListener('click', (e)=>{ try{ e.stopPropagation(); }catch{} nextStartPreserveEasy = false; showGame(); start(); }); }
-  if(btnStartMulti){ btnStartMulti.addEventListener('click', (e)=>{ try{ e.stopPropagation(); }catch{} showJoin(); }); }
+  if(btnStartSolo){ btnStartSolo.addEventListener('click', (e)=>{ try{ e.stopPropagation(); }catch{} isTraining=false; nextStartPreserveEasy = false; try{ window.__updateEasyVisible?.(false); window.__updateAIPowerVisible?.(false); }catch{} easyMode=false; showGame(); start(); }); }
+  if(btnStartMulti){ btnStartMulti.addEventListener('click', (e)=>{ try{ e.stopPropagation(); }catch{} isTraining=false; try{ window.__updateEasyVisible?.(false); window.__updateAIPowerVisible?.(false); }catch{} easyMode=false; showJoin(); }); }
+  const onTrainingStart = (e)=>{ try{ e?.stopPropagation?.(); }catch{} isTraining=true; nextStartPreserveEasy = true; easyMode = true; if(!aiProfile) aiProfile='equilibre';
+    // Sync visuel du bouton Easy et du menu
+    try{
+  window.__syncEasyTrainingUI?.();
+  window.__updateAIPowerVisible?.(true);
+    }catch{}
+    showGame(); start(); try{ computeHint(); }catch{} };
+  if(btnStartTraining){ btnStartTraining.addEventListener('click', onTrainingStart); }
+  if(btnTrainingAlias){ btnTrainingAlias.addEventListener('click', onTrainingStart); }
   // Déverrouillage audio au premier geste (autoplay policy)
   try{
   const unlock = ()=>{ try{ fx.resume(); fx.preloadAll?.(); fx.playHomeIntroMusic(); }catch{} window.removeEventListener('pointerdown', unlock); window.removeEventListener('keydown', unlock); };
@@ -1831,8 +1917,9 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
       heroContent.addEventListener('click', (ev)=>{
         const btn = ev.target && (ev.target.closest && ev.target.closest('button'));
         if(!btn) return;
-  if(btn.id === 'btn-start-solo'){ nextStartPreserveEasy = false; showGame(); start(); }
-  else if(btn.id === 'btn-start-multi'){ showJoin(); }
+  if(btn.id === 'btn-start-solo'){ isTraining=false; nextStartPreserveEasy = false; try{ window.__updateEasyVisible?.(false); }catch{} easyMode=false; showGame(); start(); }
+  else if(btn.id === 'btn-start-multi'){ isTraining=false; try{ window.__updateEasyVisible?.(false); }catch{} easyMode=false; showJoin(); }
+  else if(btn.id === 'btn-start-training' || btn.id === 'btn-training'){ isTraining=true; nextStartPreserveEasy = true; easyMode = true; if(!aiProfile) aiProfile='equilibre'; try{ window.__syncEasyTrainingUI?.(); window.__updateAIPowerVisible?.(true); }catch{} showGame(); start(); try{ computeHint(); }catch{} }
     // ne pas relayer btn-hero-top10 ici pour éviter un double déclenchement
       });
     }
@@ -3159,7 +3246,7 @@ function updateOpponentVisibility(){
   // Recalibrer la taille du plateau au basculement solo/multi
   try{ fitBoardToContainer(); draw(); balanceUnderPanelsHeight(); }catch{}
   // miniature en sidebar: visible seulement en multi (gérée par CSS via .solo-mode)
-  // Visibilité du bouton Easy: masqué en solo, sauf si le joueur s'appelle "kham"; visible en multi
+  // Visibilité du bouton Easy: visible uniquement en mode Training (isTraining), ou si on observe est faux et multi
   try{
     const easyBtn = document.getElementById('easy-btn');
     const aiDD = document.getElementById('ai-dd');
@@ -3169,8 +3256,8 @@ function updateOpponentVisibility(){
   const isKham = (playerName||'').trim().toLowerCase() === 'kham';
   // En mode observateur: jamais visible
       if(isObserving){ easyBtn.style.display = 'none'; if(aiDD){ aiDD.classList.add('hidden'); easyBtn.setAttribute('aria-expanded','false'); } }
-  else if(isSolo && !isKham){ easyBtn.style.display = 'none'; }
-  else { easyBtn.style.display = ''; }
+  else if(isTraining){ easyBtn.style.display = ''; }
+  else { easyBtn.style.display = 'none'; }
     }
   }catch{}
   // Cadre spectateur droit
@@ -3278,6 +3365,7 @@ function showJoin(){
   observingRoom = null; pendingObserveRoom = null; obsLeftId = obsRightId = null; obsCount = 0; spectatorsList = [];
   // Remettre l'UI à plat
   resetIdleView();
+  try{ window.__updateAIPowerVisible?.(false); }catch{}
 }
 function showGame(){
   try{ document.body.classList.add('game-open'); }catch{}

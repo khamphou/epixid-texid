@@ -169,6 +169,20 @@
             <svg class="ico ico-thumb-down" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M2 3h4v12H2V3zm20 11c0 1.1-.9 2-2 2h-6l1 4-6-7V4h11c1.1 0 2 .9 2 2v8z"/></svg>
             <span class="visually-hidden">Nouvelle partie</span>
           </button>
+
+          <!-- Bouton IA (Training) — apparaît uniquement en mode Training -->
+          <button id="ai-power-btn" class="btn hidden" aria-haspopup="menu" aria-expanded="false" title="IA (Training)">
+            <!-- Icône Power -->
+            <svg class="ico" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a1 1 0 011 1v8a1 1 0 11-2 0V3a1 1 0 011-1zm5.657 3.343a1 1 0 011.414 1.414A8 8 0 1112 4a1 1 0 110 2 6 6 0 106.657-.657z"/></svg>
+            <span class="visually-hidden">IA Training</span>
+          </button>
+          <div id="ai-power-dd" class="ai-dd hidden" role="menu" aria-label="Profil IA (Training)">
+            <button class="ai-opt" role="menuitemradio" aria-checked="true" data-value="off" title="Désactiver l’assistance"><span class="ai-ico">⏻</span><span class="ai-lab">Off</span></button>
+            <button class="ai-opt" role="menuitemradio" aria-checked="false" data-value="prudent" title="Éviter trous et surplombs"><span class="ai-ico">🧱</span><span class="ai-lab">Prudent</span></button>
+            <button class="ai-opt" role="menuitemradio" aria-checked="false" data-value="conservateur" title="Empilement sûr"><span class="ai-ico">🛡️</span><span class="ai-lab">Conservateur</span></button>
+            <button class="ai-opt" role="menuitemradio" aria-checked="false" data-value="equilibre" title="Compromis"><span class="ai-ico">⚖️</span><span class="ai-lab">Équilibré</span></button>
+            <button class="ai-opt" role="menuitemradio" aria-checked="false" data-value="agressif" title="Favorise clears 3+ et Tetris"><span class="ai-ico">🔥</span><span class="ai-lab">Agressif</span></button>
+          </div>
           <button id="btn-mp-leave" class="btn danger" title="Quitter" aria-label="Quitter">
             <svg class="ico" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10 17l5-5-5-5v10zm-6-9h2v8H4V8zm12-6H8a2 2 0 00-2 2v2h2V4h8v16H8v-2H6v2a2 2 0 002 2h8a2 2 0 002-2V4a2 2 0 00-2-2z"/></svg>
             <span class="visually-hidden">Quitter</span>

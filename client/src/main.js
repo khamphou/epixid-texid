@@ -1,5 +1,7 @@
 import { Core } from './core/core.js';
 import { HomeScreen } from './screens/HomeScreen.js';
+import { TrainingScreen } from './screens/TrainingScreen.js';
+import { modeFactory } from './modes/modeFactory.js';
 import { initHero } from './hero.js';
 import { bootAudio, resumeAudio, audio } from './audio.js';
 import './style.css';
@@ -7,6 +9,7 @@ import './style.css';
 const root = document.getElementById('app-root');
 const core = new Core(root);
 let stopHero = null; // pour contrôler l'animation du hero
+let audioBooted = false; // bootAudio après geste utilisateur uniquement
 
 function bindHomeDOM(){
   const qs = (s)=> document.querySelector(s);
@@ -17,12 +20,19 @@ function bindHomeDOM(){
   qs('#drawer-credits .drawer-backdrop')?.addEventListener('click', (e)=>{ if(e.target?.dataset?.close) closeDrawer(); });
   document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeDrawer(); });
   // Reprise audio après interaction utilisateur (politique navigateur)
-  const resumeOnUser = ()=>{ resumeAudio(); document.removeEventListener('pointerdown', resumeOnUser); document.removeEventListener('keydown', resumeOnUser); };
+  const resumeOnUser = ()=>{
+    try{ if(!audioBooted){ bootAudio(); audioBooted = true; } }catch{}
+    try{ resumeAudio(); }catch{}
+    document.removeEventListener('pointerdown', resumeOnUser);
+    document.removeEventListener('keydown', resumeOnUser);
+  };
   document.addEventListener('pointerdown', resumeOnUser); document.addEventListener('keydown', resumeOnUser);
 
   // Démarrages
   qs('#btn-start-solo')?.addEventListener('click', ()=> startSolo());
-  qs('#btn-start-training')?.addEventListener('click', ()=> startSolo('daily_tspin_rush'));
+  // Supporte les deux IDs potentiels selon le markup
+  qs('#btn-start-training')?.addEventListener('click', ()=> startTraining());
+  qs('#btn-training')?.addEventListener('click', ()=> startTraining());
   // Placeholder
   qs('#btn-start-arcade')?.addEventListener('click', ()=>{});
   qs('#btn-start-multi')?.addEventListener('click', ()=> startMulti());
@@ -54,6 +64,27 @@ function bindHomeDOM(){
     document.getElementById('topbar')?.classList.remove('hidden');
     // Afficher le canvas du ScreenManager
   try{ core.sm.canvas.style.display = 'block'; core.sm.canvas.style.pointerEvents = 'auto'; }catch{}
+  }
+  async function startTraining(){
+    navigateToCanvas();
+    try{ stopHero?.(); stopHero = null; }catch{}
+    try{ document.getElementById('drawer-credits')?.classList.remove('open'); }catch{}
+    try{ document.getElementById('dlg-top10')?.close?.(); }catch{}
+    // Charger un mode d'entraînement réel pour obtenir des règles avec attackFor
+    try{
+      const { rules, objectives } = await core.loadMode('daily_tspin_rush', { multiplayer:false });
+      core.sm.replace(new TrainingScreen(core, { rules, objectives }));
+    }catch(err){
+      // Fallback local minimal (mêmes valeurs que HomeScreen._launchTraining)
+      const fallbackCfg={ id:'local_training',version:1,title:'Training (local)',description:'Mode entraînement',visibility:'public',mode:'solo',
+        lobby:{minPlayers:1,maxPlayers:1,seedPolicy:'perPlayer'},
+        rules:{ attackTable:{single:0,double:1,triple:2,tetris:4,tspin:{single:2,double:4,triple:6},backToBackBonus:1,comboTable:[0,1,1,2,2,3,3,4,4,5]},
+          garbage:{delayMs:600,telegraphMs:600,messiness:0.35,cancelPolicy:'net'}, speed:{lockDelayMs:500, gravityCurve:[{t:0,gravity:1}]}, inputs:{dasMs:110,arrMs:10,allow180:true,allowHold:true,holdConsumesLock:true}, badges:{enabled:false,perKOPercent:0,maxStacks:0}},
+        objectives:{winCondition:'first_to_objectives',targets:{survive:{seconds:9999}}}, leaderboard:{scope:'none',scoring:'score'} };
+      const { rules, objectives } = modeFactory.fromConfig(fallbackCfg);
+      core.sm.replace(new TrainingScreen(core, { rules, objectives }));
+    }
+    try{ audio.setMusicIntensity?.(0.25); }catch{}
   }
   async function startMulti(){
     navigateToCanvas();
@@ -123,8 +154,7 @@ core.boot().then(()=>{
   bindTopbar();
   // Animation hero (si présente dans le DOM)
   stopHero = initHero();
-  // Audio
-  bootAudio();
+  // Audio: booté après geste utilisateur (voir resumeOnUser)
   // Par défaut, si le hero DOM est visible, masquer le canvas de rendu
   try{ core.sm.canvas.style.display = 'none'; }catch{}
 });

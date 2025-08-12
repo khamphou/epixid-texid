@@ -103,3 +103,41 @@ canvas{display:block}
 .help-callout em{font-style:normal; color:#eaffff}
 /* utils */
 .hidden{display:none}
+
+#easy-btn { margin-left: auto; padding-right: 16px; }
+#easy-btn.active { background: #0ea5e9; color: #fff; }
+#easy-btn.easy-prudent { box-shadow: 0 0 0 2px #22c55e inset; }
+#easy-btn.easy-conservateur { box-shadow: 0 0 0 2px #a3e635 inset; }
+#easy-btn.easy-equilibre { box-shadow: 0 0 0 2px #38bdf8 inset; }
+#easy-btn.easy-agressif { box-shadow: 0 0 0 2px #f97316 inset; }
+
+/* Indicateur dropdown: petite flèche en bas à droite du bouton */
+#easy-btn{ position: relative; }
+#easy-btn::after{
+	content: "";
+	position: absolute; right: 8px; bottom: 6px; width: 0; height: 0;
+	border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 6px solid currentColor;
+	opacity: .85; pointer-events: none;
+}
+
+.dropdown { position: fixed; min-width: 180px; background: rgba(20,20,24,0.96); color: #eee; border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 6px; z-index: 50; box-shadow: 0 10px 28px rgba(0,0,0,0.35); }
+.dropdown.hidden { display: none; }
+.dropdown .ai-opt { padding: 8px 10px; border-radius: 6px; cursor: pointer; }
+.dropdown .ai-opt:hover { background: rgba(56,189,248,0.15); }
+
+.topbar { position: fixed; top: 0; left: 0; right: 0; height: 48px; display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: rgba(0,0,0,0.45); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); z-index: 40; }
+.topbar .btn.hidden { display: none; }
+.hero { margin-top: 64px; }
+
+/* Menu IA (mêmes styles que legacy) */
+.ai-dd{position:fixed; z-index:1000; margin-top:0; padding:6px; border:1px solid #242933; border-radius:12px; background:linear-gradient(180deg,#0f1318,#0b0e12); box-shadow:0 20px 80px rgba(0,0,0,.55)}
+.ai-dd.hidden{display:none}
+.ai-dd .ai-opt{display:flex; align-items:center; gap:8px; width:100%; text-align:left; padding:10px 12px; border:1px solid transparent; border-radius:10px; background:transparent; color:#e5e7eb; cursor:pointer}
+.ai-dd .ai-opt .ai-ico{width:18px; display:inline-flex; justify-content:center}
+.ai-dd .ai-opt .ai-lab{flex:1}
+.ai-dd .ai-opt[aria-checked="true"]{background:linear-gradient(180deg,#1e232b,#151920); border-color:#2a2f37; box-shadow:inset 0 0 0 1px rgba(56,189,248,.12)}
+.ai-dd .ai-opt:hover, .ai-dd .ai-opt:focus-visible{border-color:#3a9bd9; color:#fff; background:linear-gradient(180deg, rgba(14,165,233,.18), rgba(14,165,233,.08)); box-shadow:0 0 0 3px rgba(56,189,248,.16)}
+
+/* Petit connecteur visuel du menu IA avec le bouton (écart 4px) */
+.ai-dd.connector{ position: fixed; }
+.ai-dd.connector::before{ content:""; position:absolute; top:-6px; right:12px; width:12px; height:10px; background: linear-gradient(180deg,#0f1318,#0b0e12); border-left:1px solid #242933; border-top:1px solid #242933; border-right:1px solid transparent; border-bottom:1px solid transparent; transform: skewX(35deg); border-top-left-radius:6px; box-shadow: -2px -2px 6px rgba(0,0,0,.25); }

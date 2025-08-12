@@ -3,18 +3,39 @@ import { AudioFX } from './audio.js';
 // --- Modale Crédits ---
 document.addEventListener('DOMContentLoaded', function() {
   const btnCredits = document.getElementById('btn-credits');
-  const modalCredits = document.getElementById('modal-credits');
-  const btnCloseCredits = document.getElementById('btn-close-credits');
-  if(btnCredits && modalCredits) {
+  const drawer = document.getElementById('drawer-credits');
+  const panel = drawer ? drawer.querySelector('.drawer-panel') : null;
+  const btnClose = document.getElementById('drawer-credits-close');
+  const descSlot = document.getElementById('credits-desc-slot');
+  let originalDescParent = null;
+  let descNode = null;
+  function lockBody(lock){ try{ document.body.style.overflow = lock? 'hidden':'auto'; }catch{} }
+  function openDrawer(){ if(!drawer) return; drawer.classList.add('open'); drawer.setAttribute('aria-hidden','false'); lockBody(true); try{ panel?.focus?.(); }catch{} }
+  function closeDrawer(){ if(!drawer) return; drawer.classList.remove('open'); drawer.setAttribute('aria-hidden','true'); lockBody(false);
+    // Rapatrier la description si on l’avait déplacée (sécurité)
+    try{ if(descNode && originalDescParent){ originalDescParent.appendChild(descNode); } }catch{}
+  }
+  if(btnCredits && drawer){
     btnCredits.addEventListener('click', function() {
-      modalCredits.classList.remove('hidden');
+      // Insérer le texte si la description du hero n’existe plus
+      try{
+        descNode = document.querySelector('.hero-desc');
+        if(descSlot){
+          descSlot.innerHTML = '';
+          if(descNode){ originalDescParent = descNode.parentElement; descSlot.appendChild(descNode); }
+          else {
+            const p = document.createElement('div');
+            p.className = 'hero-desc';
+            p.innerHTML = '<span class="hd-ico" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2l2.5 5 5.5.8-4 3.9.9 5.5L12 15.9 7.1 17.2 8 11.7 4 7.8l5.5-.8L12 2z"/></svg></span><p class="subtitle">Plongez dans une ambiance sombre et mystérieuse. Jouez en Solo, entraînez-vous en mode Easy, ou préparez-vous pour le mode Arcade à venir. Des ombres profondes, des faisceaux de lumière, et un challenge unique vous attendent.</p>';
+            descSlot.appendChild(p);
+          }
+        }
+      }catch{}
+      openDrawer();
     });
   }
-  if(btnCloseCredits && modalCredits) {
-    btnCloseCredits.addEventListener('click', function() {
-      modalCredits.classList.add('hidden');
-    });
-  }
+  if(btnClose){ btnClose.addEventListener('click', closeDrawer); }
+  if(drawer){ drawer.addEventListener('click', (e)=>{ const t=e.target; if(t && (t.getAttribute && t.getAttribute('data-close')==='true')) closeDrawer(); }); }
 });
 
 // Constantes jeu
@@ -23,6 +44,75 @@ const ROWS = 20;
 let TILE = 30; // pixels (ajustable)
 const START_SPEED_MS = 800; // intervalle de chute initial
 const SPEEDUP_EVERY_MS = 30000; // +vite toutes les 30s
+
+// --- Définitions tétriminos et utilitaires ---
+// Matrices 4x4 (1 = bloc). Orientation de base standard (I horizontal, etc.)
+const TETROMINOS = {
+  I: [
+    [0,0,0,0],
+    [1,1,1,1],
+    [0,0,0,0],
+    [0,0,0,0],
+  ],
+  J: [
+    [1,0,0,0],
+    [1,1,1,0],
+    [0,0,0,0],
+    [0,0,0,0],
+  ],
+  L: [
+    [0,0,1,0],
+    [1,1,1,0],
+    [0,0,0,0],
+    [0,0,0,0],
+  ],
+  O: [
+    [0,1,1,0],
+    [0,1,1,0],
+    [0,0,0,0],
+    [0,0,0,0],
+  ],
+  S: [
+    [0,1,1,0],
+    [1,1,0,0],
+    [0,0,0,0],
+    [0,0,0,0],
+  ],
+  T: [
+    [0,1,0,0],
+    [1,1,1,0],
+    [0,0,0,0],
+    [0,0,0,0],
+  ],
+  Z: [
+    [1,1,0,0],
+    [0,1,1,0],
+    [0,0,0,0],
+    [0,0,0,0],
+  ],
+};
+const SHAPES = Object.keys(TETROMINOS);
+const COLORS = {
+  I: '#7DD3FC', // light cyan
+  J: '#60A5FA', // blue
+  L: '#F59E0B', // amber
+  O: '#FDE047', // yellow
+  S: '#22C55E', // green
+  T: '#A78BFA', // purple
+  Z: '#EF4444', // red
+};
+// Helpers
+function clone(mat){ return mat.map(row => row.slice()); }
+function rotateCW(mat){
+  const n = 4; const r = Array.from({length:n},()=>Array(n).fill(0));
+  for(let j=0;j<n;j++) for(let i=0;i<n;i++){ r[i][n-1-j] = mat[j][i]; }
+  return r;
+}
+// Noms de niveaux (affichage HUD)
+const LEVEL_NAMES = [
+  'Pepouz', 'Détendu', 'Focus', 'Vif', 'Nervuré',
+  'Aiguisé', 'Tranchant', 'Fougueux', 'Fulgurant', 'Légende'
+];
 
 // Utilitaires serveur (restaurés)
 function getServerOrigin(){
@@ -58,74 +148,7 @@ async function apiTop10Push(name, score, durationMs, mode){
 }
 // Canvas principal du jeu
 const cvs = document.getElementById('game');
-// Canvas d'effets au-dessus du voile (id="hero-fx")
-const heroFx = document.getElementById('hero-fx');
-if(heroFx){
-  const hctx = heroFx.getContext('2d');
-  let beams = [];
-  const BEAM_COUNT = 7;
-  function initBeams(){
-    beams = [];
-    for(let i=0;i<BEAM_COUNT;i++){
-      beams.push({
-        x: Math.random()*heroFx.width,
-        y: Math.random()*heroFx.height,
-        angle: Math.random()*Math.PI*2,
-        speed: 0.6+Math.random()*0.6,
-        width: 120+Math.random()*80,
-        length: 420+Math.random()*240,
-        alpha: 0.28+Math.random()*0.15
-      });
-    }
-  }
-  function drawBeams(){
-    hctx.clearRect(0,0,heroFx.width,heroFx.height);
-    for(const b of beams){
-      hctx.save();
-      hctx.globalAlpha = b.alpha;
-      hctx.translate(b.x,b.y);
-      hctx.rotate(b.angle);
-      const grad = hctx.createLinearGradient(0,0,0,b.length);
-      grad.addColorStop(0, 'rgba(255,255,230,0.38)');
-      grad.addColorStop(0.2,'rgba(210,230,255,0.22)');
-      grad.addColorStop(0.6,'rgba(140,190,255,0.10)');
-      grad.addColorStop(1, 'rgba(80,120,180,0)');
-      hctx.fillStyle = grad;
-      hctx.beginPath();
-      hctx.moveTo(-b.width/2,0);
-      hctx.lineTo(b.width/2,0);
-      hctx.lineTo(b.width/2.2,b.length);
-      hctx.lineTo(-b.width/2.2,b.length);
-      hctx.closePath();
-      hctx.shadowColor = 'rgba(255,255,230,0.35)';
-      hctx.shadowBlur = 42;
-      hctx.fill();
-      hctx.restore();
-    }
-  }
-  function animate(){
-    for(const b of beams){
-      b.x += Math.cos(b.angle)*b.speed;
-      b.y += Math.sin(b.angle)*b.speed;
-      b.angle += (Math.random()-0.5)*0.0045;
-      if(b.x< -200 || b.x> heroFx.width+200 || b.y< -200 || b.y> heroFx.height+200){
-        b.x = Math.random()*heroFx.width;
-        b.y = Math.random()*heroFx.height;
-        b.angle = Math.random()*Math.PI*2;
-      }
-    }
-    drawBeams();
-    requestAnimationFrame(animate);
-  }
-  function resize(){
-    heroFx.width = heroFx.offsetWidth;
-    heroFx.height = heroFx.offsetHeight;
-    initBeams();
-  }
-  window.addEventListener('resize', resize);
-  resize();
-  animate();
-}
+// Canvas d'effets (hero-fx) animé par l'animation tétriminos (setupHeroAnimation)
 
 // --------- Compteur 5s piloté par serveur ---------
 function onServerCountdown(seconds){
@@ -3438,20 +3461,65 @@ function balanceUnderPanelsHeight(){
 
 // ======== Animation Héro (canvas) ========
 let heroCvs=null, heroFxCvs=null, heroCtx=null, heroFxCtx=null, heroRAF=0, heroBlocks=[], heroParticles=[];
+let _heroCssW=0, _heroCssH=0; // dimensions CSS (px) pour le dessin
+let _heroLastFrame=0, _heroFallbackTimer=null, _heroInterval=null, _heroHasDrawn=false;
 function setupHeroAnimation(){
   heroCvs = document.getElementById('hero-bg');
   heroFxCvs = document.getElementById('hero-fx');
   if(!heroCvs) return;
   heroCtx = heroCvs.getContext('2d');
   heroFxCtx = heroFxCvs ? heroFxCvs.getContext('2d') : null;
-  const resize=()=>{ 
-    heroCvs.width = heroCvs.clientWidth; heroCvs.height = heroCvs.clientHeight;
-    if(heroFxCvs){ heroFxCvs.width = heroFxCvs.clientWidth; heroFxCvs.height = heroFxCvs.clientHeight; }
+  // Resize robuste: prend en compte le devicePixelRatio et les 0px initiaux
+  const doResize = ()=>{
+    try{
+      const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+      const cssW = heroCvs.clientWidth || heroCvs.offsetWidth || 0;
+      const cssH = heroCvs.clientHeight || heroCvs.offsetHeight || 0;
+      _heroCssW = cssW; _heroCssH = cssH;
+      // BG canvas
+      heroCvs.width = Math.max(1, Math.floor(cssW * dpr));
+      heroCvs.height = Math.max(1, Math.floor(cssH * dpr));
+      if(heroCtx){ heroCtx.setTransform(dpr,0,0,dpr,0,0); }
+      // FX canvas (au-dessus du fond, sous le menu)
+      if(heroFxCvs){
+        const cssW2 = heroFxCvs.clientWidth || heroFxCvs.offsetWidth || cssW;
+        const cssH2 = heroFxCvs.clientHeight || heroFxCvs.offsetHeight || cssH;
+        heroFxCvs.width = Math.max(1, Math.floor(cssW2 * dpr));
+        heroFxCvs.height = Math.max(1, Math.floor(cssH2 * dpr));
+        if(heroFxCtx){ heroFxCtx.setTransform(dpr,0,0,dpr,0,0); }
+      }
+    }catch{}
   };
-  resize(); window.addEventListener('resize', resize);
+  const resize=()=>{
+    doResize();
+    // Si la mise en page n’est pas encore prête (0px), réessayer rapidement
+    if((_heroCssW|0)===0 || (_heroCssH|0)===0){ setTimeout(doResize, 50); setTimeout(doResize, 150); }
+  };
+  resize();
+  // Suivre les changements de taille du conteneur .hero
+  try{
+    const hero = document.querySelector('.hero');
+    if(hero && window.ResizeObserver){ const ro = new ResizeObserver(()=> resize()); ro.observe(hero); }
+  }catch{}
+  window.addEventListener('resize', resize);
   // graines initiales
   heroBlocks = [];
-  for(let i=0;i<28;i++){ heroBlocks.push(makeHeroBlock()); }
+  for(let i=0;i<34;i++){ heroBlocks.push(makeHeroBlock()); }
+  // watchdog: si rien n'a été dessiné au bout de 900ms, forcer un burst + fallback interval
+  try{ if(_heroFallbackTimer) clearTimeout(_heroFallbackTimer); }catch{}
+  _heroHasDrawn = false; _heroLastFrame = 0;
+  _heroFallbackTimer = setTimeout(()=>{
+    try{
+      if(!_heroHasDrawn){
+        // forcer des blocs très visibles + un burst au centre
+        for(let k=0;k<20;k++) heroBlocks.push(makeHeroBlock());
+        const rect = (heroFxCvs||heroCvs).getBoundingClientRect();
+        spawnHeroBurst(rect.left + rect.width*0.5, rect.top + rect.height*0.5, 1);
+        if(!_heroInterval){ _heroInterval = setInterval(()=> drawHero(performance.now()), 1000/30); }
+        if(heroFxCvs){ heroFxCvs.style.visibility='visible'; heroFxCvs.style.opacity='1'; }
+      }
+    }catch{}
+  }, 900);
   // burst d'intro
   try{
     const rect = heroCvs.getBoundingClientRect();
@@ -3479,14 +3547,14 @@ function setupHeroAnimation(){
   startHeroAnimation();
 }
 function startHeroAnimation(){ if(heroRAF) return; const loop=(t)=>{ drawHero(t); heroRAF = requestAnimationFrame(loop); }; heroRAF = requestAnimationFrame(loop); }
-function stopHeroAnimation(){ if(heroRAF){ cancelAnimationFrame(heroRAF); heroRAF=0; } }
+function stopHeroAnimation(){ if(heroRAF){ cancelAnimationFrame(heroRAF); heroRAF=0; } try{ if(_heroInterval){ clearInterval(_heroInterval); _heroInterval=null; } }catch{} }
 function makeHeroBlock(){
   // Désormais: véritables tétriminos 4×4
   const keys = SHAPES;
   const key = keys[(Math.random()*keys.length)|0];
   const mat = clone(TETROMINOS[key]);
   const color = COLORS[key] || '#9AA0A8';
-  const baseCell = 14 + Math.random()*10; // taille cell (px) pour le rendu héro
+  const baseCell = 16 + Math.random()*12; // un peu plus grand pour la lisibilité
   return {
     type: 'tetromino',
     key,
@@ -3496,7 +3564,7 @@ function makeHeroBlock(){
     x: Math.random(), // 0..1 (ratio largeur)
     y: -Math.random()*0.25, // au-dessus
     size: baseCell*4, // taille globale indicative
-    speed: 0.10 + Math.random()*0.18, // rapide
+  speed: 0.16 + Math.random()*0.24, // un peu plus rapide
     rot: Math.random()*Math.PI*2,
     rotSpeed: (-1.2+Math.random()*2.4)*1.2, // rotation plus vive
     life: 1, // garder en vie jusqu’à explosion
@@ -3516,14 +3584,29 @@ function spawnHeroBurst(clientX, clientY, power=0){
   }
 }
 function drawHero(ts){
-  if(!heroCtx||!heroCvs) return;
-  const w=heroCvs.width, h=heroCvs.height;
-  // fond déjà géré par CSS; on dessine juste des blocs additifs
-  heroCtx.clearRect(0,0,w,h);
+  if(!(heroFxCtx||heroCtx)) return;
+  const baseCvs = (heroFxCvs && heroFxCtx) ? heroFxCvs : heroCvs;
+  if(!baseCvs) return;
+  const cssW = _heroCssW || baseCvs.clientWidth || baseCvs.width;
+  const cssH = _heroCssH || baseCvs.clientHeight || baseCvs.height;
+  if(!cssW || !cssH) return;
+  _heroLastFrame = ts||performance.now(); _heroHasDrawn = true;
+  // Nettoyer les deux canvases, en neutralisant la transform pour clearRect
+  const safeClear = (ctx, cvs)=>{
+    if(!ctx || !cvs) return;
+    ctx.save();
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,cvs.width,cvs.height);
+    ctx.restore();
+  };
+  safeClear(heroCtx, heroCvs);
+  safeClear(heroFxCtx, heroFxCvs);
+  // Dessiner au-dessus du fond mais sous le menu → préférer heroFxCtx quand dispo
+  const ctx = heroFxCtx || heroCtx;
   const dt = 1/60;
   // parfois, ajouter un bloc
-  const target = 30 + Math.floor(Math.sin(ts*0.0015)*4);
-  if(heroBlocks.length<target && Math.random()<0.16){ heroBlocks.push(makeHeroBlock()); }
+  const target = 34 + Math.floor(Math.sin(ts*0.0015)*6);
+  if(heroBlocks.length<target && Math.random()<0.22){ heroBlocks.push(makeHeroBlock()); }
   heroBlocks.forEach(b=>{
     if(b.exploded){ b.life -= 0.02; }
     else {
@@ -3533,12 +3616,12 @@ function drawHero(ts){
       b.x += Math.sin((ts*0.001) + b.wobble) * 0.0005;
       if(b.y>0.92){ b.exploded = true; }
     }
-    const x = b.x*w, y = b.y*h;
-    heroCtx.save();
-    heroCtx.translate(x,y); heroCtx.rotate(b.rot);
+  const x = b.x*cssW, y = b.y*cssH;
+    ctx.save();
+    ctx.translate(x,y); ctx.rotate(b.rot);
     // glow plus visible
-    heroCtx.globalAlpha = 0.9;
-    heroCtx.shadowColor = 'rgba(56,189,248,0.35)'; heroCtx.shadowBlur = 18;
+    ctx.globalAlpha = 0.92;
+    ctx.shadowColor = 'rgba(56,189,248,0.35)'; ctx.shadowBlur = 18;
     // Dessiner un tétrimino centré en fonction de son empreinte (min/max)
     const m = b.mat;
     let minX=4,maxX=0,minY=4,maxY=0;
@@ -3550,47 +3633,44 @@ function drawHero(ts){
     for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(m[j][i]){
       const px = offx + (i-minX)*cell;
       const py = offy + (j-minY)*cell;
-  const grad = heroCtx.createLinearGradient(px,py,px,py+cell);
+  const grad = ctx.createLinearGradient(px,py,px,py+cell);
   // légère oscillation de teinte pour animer le visuel
   const osc = Math.sin((ts*0.002) + i + j) * 6;
   grad.addColorStop(0, shade(b.color, 10 + osc));
   grad.addColorStop(1, shade(b.color,-12 + osc*0.5));
-      heroCtx.fillStyle = grad;
-      roundRect(heroCtx, px+2, py+2, cell-4, cell-4, 5);
-      heroCtx.fill();
-      heroCtx.strokeStyle = 'rgba(0,0,0,.28)';
-      heroCtx.lineWidth = 1.5;
-      roundRect(heroCtx, px+2, py+2, cell-4, cell-4, 5);
-      heroCtx.stroke();
+      ctx.fillStyle = grad;
+      roundRect(ctx, px+2, py+2, cell-4, cell-4, 5);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,.28)';
+      ctx.lineWidth = 1.5;
+      roundRect(ctx, px+2, py+2, cell-4, cell-4, 5);
+      ctx.stroke();
     }
     // explosion simple: halo
     if(b.exploded){
-      heroCtx.globalCompositeOperation='lighter'; heroCtx.globalAlpha = 0.85;
+      ctx.globalCompositeOperation='lighter'; ctx.globalAlpha = 0.85;
       const s = Math.max(wCells,hCells)*cell;
-      heroCtx.fillStyle='rgba(56,189,248,0.15)';
-      heroCtx.beginPath(); heroCtx.arc(0,0, s*0.9*(1.1-b.life), 0, Math.PI*2); heroCtx.fill();
+      ctx.fillStyle='rgba(56,189,248,0.15)';
+      ctx.beginPath(); ctx.arc(0,0, s*0.9*(1.1-b.life), 0, Math.PI*2); ctx.fill();
     }
-    heroCtx.restore();
+    ctx.restore();
   });
   // supprimer blocs trop fades
   heroBlocks = heroBlocks.filter(b=> b.life>0.05 && b.y<1.2);
-  // Particules FX
-  if(heroFxCtx){
-    heroFxCtx.clearRect(0,0,heroFxCvs.width, heroFxCvs.height);
-    const dtp = 1/60;
-    heroParticles.forEach(p=>{
-      p.vy += 400*dtp; // gravité
-      p.x += p.vx*dtp; p.y += p.vy*dtp;
-      p.life -= 0.018;
-      heroFxCtx.save();
-      heroFxCtx.globalCompositeOperation = 'lighter';
-      heroFxCtx.globalAlpha = Math.max(0, p.life);
-      heroFxCtx.fillStyle = `hsl(${p.hue}deg 90% 65%)`;
-      heroFxCtx.beginPath(); heroFxCtx.arc(p.x, p.y, p.size, 0, Math.PI*2); heroFxCtx.fill();
-      heroFxCtx.restore();
-    });
-    heroParticles = heroParticles.filter(p=> p.life>0 && p.y < heroFxCvs.height+20);
-  }
+  // Particules FX au-dessus (même canvas si heroFxCtx)
+  const pcv = baseCvs; const ctxp = ctx; const dtp = 1/60;
+  heroParticles.forEach(p=>{
+    p.vy += 400*dtp; // gravité
+    p.x += p.vx*dtp; p.y += p.vy*dtp;
+    p.life -= 0.018;
+    ctxp.save();
+    ctxp.globalCompositeOperation = 'lighter';
+    ctxp.globalAlpha = Math.max(0, p.life);
+    ctxp.fillStyle = `hsl(${p.hue}deg 90% 65%)`;
+    ctxp.beginPath(); ctxp.arc(p.x, p.y, p.size, 0, Math.PI*2); ctxp.fill();
+    ctxp.restore();
+  });
+  heroParticles = heroParticles.filter(p=> p.life>0 && p.y < (pcv ? pcv.height : h)+20);
 }
 
 // --------- Easy Mode: calcul du meilleur placement avec lookahead (1) ---------

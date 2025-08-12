@@ -13,18 +13,25 @@
   </head>
   <body>
     <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
-    <!-- Modale Crédits -->
-    <div id="modal-credits" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="credits-title">
-      <div class="modal-content">
-        <h2 id="credits-title">Crédits</h2>
-        <ul class="credits-list">
-          <li><strong>Société :</strong> Epixid</li>
-          <li><strong>Développeur :</strong> Khamphou</li>
-          <li><strong>Contact :</strong> contact@epixid.com</li>
-          <li><strong>Site :</strong> <a href="https://epixid.com" target="_blank" rel="noopener">epixid.com</a></li>
-        </ul>
-        <button id="btn-close-credits" class="btn">Fermer</button>
-      </div>
+    <!-- Drawer Crédits (latéral droit) -->
+    <div id="drawer-credits" class="drawer" aria-hidden="true" aria-labelledby="credits-title">
+      <div class="drawer-backdrop" data-close="true"></div>
+      <aside class="drawer-panel" role="dialog" aria-modal="true">
+        <header class="drawer-header">
+          <h2 id="credits-title">Crédits</h2>
+          <button id="drawer-credits-close" class="btn" aria-label="Fermer">Fermer</button>
+        </header>
+        <div class="drawer-body">
+          <ul class="credits-list">
+            <li><strong>Société :</strong> Epixid</li>
+            <li><strong>Développeur :</strong> Khamphou</li>
+            <li><strong>Contact :</strong> contact@epixid.com</li>
+            <li><strong>Site :</strong> <a href="https://epixid.com" target="_blank" rel="noopener">epixid.com</a></li>
+          </ul>
+          <!-- Le bloc de description (.hero-desc) sera déplacé ici dynamiquement -->
+          <div id="credits-desc-slot"></div>
+        </div>
+      </aside>
     </div>
     <section id="screen-start" class="screen active">
       <div class="hero">
@@ -60,40 +67,6 @@
             <button id="btn-start-multi" class="btn lg">Multijoueur</button>
             <button id="btn-hero-top10" class="btn lg ghost">Top 10</button>
             <button id="btn-credits" class="btn lg ghost">Crédits</button>
-          </div>
-          <div class="hero-desc" role="note" aria-label="Présentation">
-            <span class="hd-ico" aria-hidden="true">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2l2.5 5 5.5.8-4 3.9.9 5.5L12 15.9 7.1 17.2 8 11.7 4 7.8l5.5-.8L12 2z"/></svg>
-            </span>
-            <p class="subtitle">Plongez dans une ambiance sombre et mystérieuse. Jouez en Solo, entraînez-vous en mode Easy, ou préparez-vous pour le mode Arcade à venir. Des ombres profondes, des faisceaux de lumière, et un challenge unique vous attendent.</p>
-          </div>
-          <div class="hero-stats" aria-live="polite">
-            <div class="hs-grid">
-              <div class="hs-item">
-                <div class="hs-top">
-                  <span class="hs-ico" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3h8v8H3zM13 3h8v8h-8zM3 13h8v8H3zM13 13h8v8h-8z"/></svg></span>
-                  <span class="hs-lab">Parties</span>
-                  <strong id="hs-total" class="hs-val">–</strong>
-                </div>
-                <div class="hs-bar"><span></span></div>
-              </div>
-              <div class="hs-item">
-                <div class="hs-top">
-                  <span class="hs-ico" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
-                  <span class="hs-lab">Batailles</span>
-                  <strong id="hs-battle" class="hs-val">–</strong>
-                </div>
-                <div class="hs-bar"><span></span></div>
-              </div>
-              <div class="hs-item">
-                <div class="hs-top">
-                  <span class="hs-ico" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M16 11a4 4 0 10-8 0 4 4 0 008 0zm-4 5c-4.418 0-8 2.239-8 5v2h16v-2c0-2.761-3.582-5-8-5z"/></svg></span>
-                  <span class="hs-lab">Joueurs</span>
-                  <strong id="hs-players" class="hs-val">–</strong>
-                </div>
-                <div class="hs-bar"><span></span></div>
-              </div>
-            </div>
           </div>
           <p class="start-tip"></p>
         </div>

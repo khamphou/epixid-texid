@@ -254,6 +254,8 @@ let obsLeftGrid = Array.from({length:ROWS},()=>Array(COLS).fill(null));
 let obsRightGrid = Array.from({length:ROWS},()=>Array(COLS).fill(null));
 let obsLeftActive = null;
 let obsRightActive = null;
+let obsLeftDead = false;
+let obsRightDead = false;
 // Emotes UI
 const emotesGridEl = document.getElementById('emotes-grid');
 const emotesTopEl = document.getElementById('emotes-top');
@@ -840,6 +842,31 @@ function drawObserverBoards(){
       g.addColorStop(0, shade(color,6)); g.addColorStop(1, shade(color,-8));
       obsRightCtx.fillStyle=g; roundRect(obsRightCtx, px+2, py+2, TILE-4, TILE-4, 6); obsRightCtx.fill();
     }
+    obsRightCtx.restore();
+  }
+  // Overlay "GAME OVER" centré pour gauche et droite
+  if(obsLeftDead){
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0,0,cvs.width,cvs.height);
+    ctx.fillStyle = '#ef4444';
+    const fs = Math.max(24, Math.floor(cvs.width * 0.10));
+    ctx.font = `bold ${fs}px Orbitron, system-ui`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('GAME OVER', cvs.width/2, Math.floor(cvs.height*0.46));
+    ctx.restore();
+  }
+  if(obsRightDead){
+    obsRightCtx.save();
+    obsRightCtx.fillStyle = 'rgba(0,0,0,0.55)';
+    obsRightCtx.fillRect(0,0,obsRightCvs.width,obsRightCvs.height);
+    obsRightCtx.fillStyle = '#ef4444';
+    const fs = Math.max(24, Math.floor(obsRightCvs.width * 0.10));
+    obsRightCtx.font = `bold ${fs}px Orbitron, system-ui`;
+    obsRightCtx.textAlign = 'center';
+    obsRightCtx.textBaseline = 'middle';
+    obsRightCtx.fillText('GAME OVER', obsRightCvs.width/2, Math.floor(obsRightCvs.height*0.46));
     obsRightCtx.restore();
   }
   // Libellés
@@ -2169,7 +2196,7 @@ function connectWS(){
           }
           // ne pas toucher à opponentDead ici pour conserver l'affichage "Éliminé" jusqu'au prochain start
           break;
-        case 'scores': {
+  case 'scores': {
           const list = Array.isArray(msg.list)? msg.list : [];
           if(observingRoom && !roomId){
             // Mode spectateur: trier par nom/id stable pour l’affichage
@@ -2189,6 +2216,9 @@ function connectWS(){
               const oppl = document.getElementById('opp-label'); if(oppl) oppl.textContent = String(obsRightName||''); try{ refreshBoardLabels(); }catch{}
               // Statuts prêts (affichage non bloquant)
               myReady = !!left?.ready; peerReady = !!right?.ready; updateReadyBadges();
+              // Etats d'élimination pilotés par snapshot
+              obsLeftDead = !!left?.dead;
+              obsRightDead = !!right?.dead;
             }
             updateScoreLabels(); updateHUD(); renderPlayersList();
           } else {
@@ -2237,13 +2267,23 @@ function connectWS(){
           }
           updateOpponentVisibility(); updateStartButtonLabel(); renderPlayersList();
         } break;
-        case 'gameover':
-          opponentDead = true;
-          // force un redraw immédiat pour afficher le bandeau Éliminé côté adverse
-          draw(); if(oppCtx) drawOpponent();
-          try{ if(oppMiniCtx){ drawOppMini(); } }catch{}
-          renderPlayersList();
-          break;
+        case 'gameover': {
+          // Un seul handler pour tous les contextes (joueur vs observateur)
+          if(observingRoom && !roomId){
+            const who = msg.who || null;
+            if(who){
+              if(who === obsLeftId) obsLeftDead = true;
+              if(who === obsRightId) obsRightDead = true;
+              draw();
+            }
+          } else {
+            opponentDead = true;
+            // force un redraw immédiat pour afficher le bandeau Éliminé côté adverse
+            draw(); if(oppCtx) drawOpponent();
+            try{ if(oppMiniCtx){ drawOppMini(); } }catch{}
+            renderPlayersList();
+          }
+        } break;
         case 'ready': {
           // en cours de manche on n’altère pas l’affichage des statuts
           if(mpStarted) break;
@@ -2278,6 +2318,7 @@ function connectWS(){
             onMatchOver(msg.scores);
           }
         } break;
+  // (case 'gameover' fusionné plus haut)
         case 'room_closed': {
           // Pas de toast demandé quand l’hôte quitte; retour direct à l’écran des parties
           onRoomClosed();
@@ -2357,6 +2398,7 @@ function connectWS(){
               resetGrid(); opponentGrid = Array.from({length:ROWS},()=>Array(COLS).fill(null));
               score=0; opponentScore=0; linesClearedTotal=0; opponentLines=0; level=1; opponentLevel=1;
               mpStarted=false; running=false; paused=false; selfDead=false; opponentDead=false; opponentActive=null;
+              obsLeftDead = false; obsRightDead = false;
               // Labels adversaire génériques
               const oppl = document.getElementById('opp-label'); if(oppl) oppl.textContent = ''; try{ refreshBoardLabels(); }catch{}
               // Afficher les deux plateaux (lecture seule)
@@ -2719,6 +2761,8 @@ function onMatchStart(seedStr){
   bag = []; nextQueue = [];
   linesClearedTotal = 0;
   opponentDead = false; opponentActive = null; selfDead = false;
+  // Reset états observateur
+  obsLeftDead = false; obsRightDead = false;
   // démarrer immédiatement (le serveur a affiché le compte à rebours)
   cancelServerCountdown();
   start();

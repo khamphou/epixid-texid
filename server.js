@@ -451,14 +451,15 @@ wss.on('connection', (ws)=>{
           if(msg.grid) r.grids.set(ws, msg.grid);
           r.actives.set(ws, msg.active || null);
         }catch{}
-        // Build a complete score list including level/lines/ready
+        // Build a complete score list including level/lines/ready/dead
         const scoreList = Array.from(r.clients).map(c=>({
           id: c.id,
           name: c.name||null,
           score: r.scores.get(c)||0,
           lines: (r.lines && r.lines.get(c)) || 0,
           level: (r.levels && r.levels.get(c)) || 1,
-          ready: !!(r.ready && r.ready.has(c))
+          ready: !!(r.ready && r.ready.has(c)),
+          dead: !!(r.done && r.done.has(c))
         }));
   for(const c of r.clients){ send(c, { type:'scores', list: scoreList }); }
   // also to observers
@@ -489,8 +490,8 @@ wss.on('connection', (ws)=>{
       ws.observe = id;
       r.observers.add(ws);
       pushSpectators(r);
-      // send initial snapshot
-      const scoreList = Array.from(r.clients).map(c=>({ id: c.id, name: c.name||null, score: r.scores.get(c)||0, lines: (r.lines && r.lines.get(c)) || 0, level: (r.levels && r.levels.get(c)) || 1, ready: !!(r.ready && r.ready.has(c)) }));
+  // send initial snapshot (with elimination flag)
+  const scoreList = Array.from(r.clients).map(c=>({ id: c.id, name: c.name||null, score: r.scores.get(c)||0, lines: (r.lines && r.lines.get(c)) || 0, level: (r.levels && r.levels.get(c)) || 1, ready: !!(r.ready && r.ready.has(c)), dead: !!(r.done && r.done.has(c)) }));
       send(ws, { type:'scores', room: r.id, list: scoreList });
       // Envoyer également la dernière grille/active de chaque joueur pour éviter les plateaux vides
       try{
@@ -499,6 +500,10 @@ wss.on('connection', (ws)=>{
           const gridSnap = (r.grids && r.grids.get(c)) || emptyGrid;
           const activeSnap = (r.actives && (r.actives.has(c) ? r.actives.get(c) : null)) || null;
           send(ws, { type:'state', room: r.id, who: c.id, grid: gridSnap, score: r.scores.get(c)||0, active: activeSnap, level: (r.levels && r.levels.get(c))||1, lines: (r.lines && r.lines.get(c))||0, ready: !!(r.ready && r.ready.has(c)) });
+          // Si ce joueur avait déjà terminé, signaler aussi gameover immédiatement
+          if(r.done && r.done.has(c)){
+            send(ws, { type:'gameover', room: r.id, who: c.id });
+          }
         }
       }catch{}
     } else if(type === 'unobserve'){
@@ -553,7 +558,7 @@ wss.on('connection', (ws)=>{
               // initialiser les scores à 0 et level=1 pour chaque joueur
               for(const c of r.clients){ r.scores.set(c, 0); try{ r.lines.set(c, 0); }catch{} try{ r.levels && r.levels.set(c, 1); }catch{} }
               // notifier un reset des scores (enrichi)
-              const initScores = Array.from(r.clients).map(c=>({ id: c.id, name: c.name||null, score: 0, lines: 0, level: 1, ready: !!(r.ready && r.ready.has(c)) }));
+              const initScores = Array.from(r.clients).map(c=>({ id: c.id, name: c.name||null, score: 0, lines: 0, level: 1, ready: !!(r.ready && r.ready.has(c)), dead: false }));
               for(const c of r.clients){ send(c, { type:'scores', list: initScores }); }
               if(r.observers && r.observers.size){ for(const o of r.observers){ send(o, { type:'scores', room: r.id, list: initScores }); } }
               // démarrer la manche
@@ -587,7 +592,7 @@ wss.on('connection', (ws)=>{
               r.scores.clear();
       r.lines.clear?.(); r.levels?.clear?.(); r.grids?.clear?.(); r.actives?.clear?.();
               for(const c of r.clients){ r.scores.set(c, 0); try{ r.lines.set(c, 0); }catch{} try{ r.levels && r.levels.set(c, 1); }catch{} }
-              const initScores2 = Array.from(r.clients).map(c=>({ id: c.id, name: c.name||null, score: 0, lines: 0, level: 1, ready: !!(r.ready && r.ready.has(c)) }));
+              const initScores2 = Array.from(r.clients).map(c=>({ id: c.id, name: c.name||null, score: 0, lines: 0, level: 1, ready: !!(r.ready && r.ready.has(c)), dead: false }));
               for(const c of r.clients){ send(c, { type:'scores', list: initScores2 }); }
               if(r.observers && r.observers.size){ for(const o of r.observers){ send(o, { type:'scores', room: r.id, list: initScores2 }); } }
               for(const c of r.clients){ send(c, { type:'start', seed: r.seed, room: r.id }); }
@@ -606,6 +611,20 @@ wss.on('connection', (ws)=>{
       broadcast(ws, { type: 'gameover', who: ws.id }, true);
   // Informer aussi les observateurs pour qu'ils puissent afficher l'état du perdant
   try{ if(r.observers && r.observers.size){ for(const o of r.observers){ send(o, { type:'gameover', room: r.id, who: ws.id }); } } }catch{}
+      // Envoyer un snapshot de scores à jour (incluant dead) pour refléter l'état dans les mises à jour régulières
+      try{
+        const scoreList = Array.from(r.clients).map(c=>({
+          id: c.id,
+          name: c.name||null,
+          score: r.scores.get(c)||0,
+          lines: (r.lines && r.lines.get(c)) || 0,
+          level: (r.levels && r.levels.get(c)) || 1,
+          ready: !!(r.ready && r.ready.has(c)),
+          dead: !!(r.done && r.done.has(c))
+        }));
+        for(const c of r.clients){ send(c, { type:'scores', list: scoreList }); }
+        if(r.observers && r.observers.size){ for(const o of r.observers){ send(o, { type:'scores', room: r.id, list: scoreList }); } }
+      }catch{}
       if(r.clients.size >= 2 && r.done.size >= 2){
   // match over
   const scores = Array.from(r.clients).map(c=>({ id: c.id, name: c.name||null, score: r.scores.get(c)||0, lines: (r.lines && r.lines.get(c)) || 0 }));

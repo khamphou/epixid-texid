@@ -79,15 +79,20 @@ export class BaseGameScreen {
   // Gestion basique des touches (multi-keys simultanées supportées par le navigateur)
   _onKeyDown(e){
     if(this.gameOver) return;
-    if(['ArrowDown','ArrowUp','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+    if(['ArrowDown','ArrowUp','ArrowLeft','ArrowRight',' '].includes(e.key)){
+      try{ e.preventDefault(); }catch{}
+      try{ e.stopPropagation(); }catch{}
+    }
   this._trackKey(e, true);
   if(e.key==='ArrowUp'){ this.onRotate?.(); return; }
-  if(e.key===' '){ this.onHardDrop?.(); return; }
+  if(e.key===' '){ this._softDropHold = false; this.onHardDrop?.(); return; }
   if(e.key==='ArrowLeft'){ if(!e.repeat) this._setDir(-1); return; }
   if(e.key==='ArrowRight'){ if(!e.repeat) this._setDir(1); return; }
   if(e.key==='ArrowDown'){ this._softDropHold = true; return; }
   }
   _onKeyUp(e){
+  // Empêcher la Space d'activer un bouton (ex: "Nouvelle partie") s'il a le focus
+  if(e.key===' '){ try{ e.preventDefault(); }catch{} try{ e.stopPropagation(); }catch{} }
   this._trackKey(e, false);
   if(e.key==='ArrowDown') this._softDropHold = false;
     if(e.key==='ArrowLeft' && !this._rightHeld()){ this._setDir(0); }
@@ -150,14 +155,14 @@ export class BaseGameScreen {
         const nh = this._nextHit;
         if(nh && endLocal.x>=nh.x && endLocal.x<=nh.x+nh.w && endLocal.y>=nh.y && endLocal.y<=nh.y+nh.h){ this.onHold?.(); return; }
       }catch{}
-      // Tap/clic: rotation (gauche = CW, droit = CCW)
-      if((this._pStart.b ?? 0) === 2){ this.onRotateCCW?.(); } else { this.onRotate?.(); }
+      // Tap/clic: gauche = rotation CW, droit = hard drop
+      if((this._pStart.b ?? 0) === 2){ this._softDropHold = false; this.onHardDrop?.(); } else { this.onRotate?.(); }
       return;
     }
     // Flick rapide
     if(dt < 200){
       // Swipe up => hard drop (meilleure pratique mobile)
-      if(dy < -40){ this.onHardDrop?.(); return; }
+      if(dy < -40){ this._softDropHold = false; this.onHardDrop?.(); return; }
       if(dx > 30){ this.onMove?.(1); return; }
       if(dx < -30){ this.onMove?.(-1); return; }
     }

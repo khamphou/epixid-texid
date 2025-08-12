@@ -75,11 +75,21 @@ export class MultiplayerGameScreen extends BaseGameScreen{
 	render(ctx){
 		const { canvas } = ctx;
 		ctx.fillStyle='#0b0f14'; ctx.fillRect(0,0,canvas.width,canvas.height);
-		// Layout basique: 2 boards côte à côte
-		const cell = 22;
+		// Layout responsive avec sidebar à droite contenant un mini plateau adverse
+		const gap = 20; const margin = 12;
+		const topbarEl = (typeof document!=='undefined') ? document.getElementById('topbar') : null;
+		const topbarVisible = !!topbarEl && getComputedStyle(topbarEl).display !== 'none';
+		const topbarH = topbarVisible ? (topbarEl.getBoundingClientRect().height||0) : 0;
+		const sideMinW = 240, sideIdealW = 300;
+		const maxCellW = Math.floor((canvas.width - margin*2 - gap - sideMinW) / this.grid.w);
+		const maxCellH = Math.floor((canvas.height - margin*2 - topbarH) / this.grid.h);
+		const cell = Math.max(12, Math.min(24, Math.min(maxCellW, maxCellH)));
 		const bw = this.grid.w*cell, bh = this.grid.h*cell;
-		const gap = 40; const totalW = bw*2 + gap; const x0 = Math.floor((canvas.width - totalW)/2); const y0 = Math.floor((canvas.height - bh)/2);
-		drawInner(ctx, x0, y0, bw, bh); drawInner(ctx, x0+bw+gap, y0, bw, bh);
+		const sideW = Math.max(sideMinW, Math.min(sideIdealW, canvas.width - margin*2 - bw - gap));
+		const x0 = Math.max(margin, Math.floor((canvas.width - (bw + gap + sideW))/2));
+		const y0 = Math.max(margin + topbarH, Math.floor((canvas.height - bh)/2));
+		const sideX = x0 + bw + gap; const sideY = y0; const sideH = Math.max(180, Math.min(bh, canvas.height - topbarH - margin*2));
+		drawInner(ctx, x0, y0, bw, bh);
 		// Moi (masquer temporairement les cellules de la pièce verrouillée si anim en cours)
 		let hideSet = null; if(this._dropAnim){ hideSet = new Set(this._dropAnim.finalCells?.map(c=>`${c.x},${c.y}`)); }
 		for(let y=0;y<this.grid.h;y++) for(let x=0;x<this.grid.w;x++){
@@ -107,19 +117,42 @@ export class MultiplayerGameScreen extends BaseGameScreen{
 				}
 			}
 		}
-		// Animation de chute rapide (overlay)
+		// Animation de chute rapide (overlay) avec léger motion blur
 		if(this._dropAnim){
-			const a=this._dropAnim; const k=Math.min(1, a.t/a.dur); const kk = (t=> 1-Math.pow(1-t,3))(k);
-			const yInterp=a.yStart + (a.yEnd-a.yStart)*kk;
+			const a=this._dropAnim; const k=Math.min(1, a.t/a.dur); const kk = (t=> 1-Math.pow(1-t,3))(k); const yInterp=a.yStart + (a.yEnd-a.yStart)*kk;
+			const trailCount=2; const dyTotal=Math.max(0,(yInterp-a.yStart)); const trailStep=dyTotal/(trailCount+1);
 			for(let j=0;j<4;j++){
 				for(let i=0;i<4;i++){
-					if(!a.mat[j][i]) continue; const gx=a.x+i; const gyf=yInterp+j; if(gx<0||gx>=this.grid.w) continue;
-					const px=x0+gx*cell, py=y0+gyf*cell; ctx.save(); ctx.globalAlpha=0.9; drawTile(ctx, px, py, cell, a.color); ctx.restore();
+					if(!a.mat[j][i]) continue; const gx=a.x+i; if(gx<0||gx>=this.grid.w) continue;
+					const yMain=yInterp+j; let px=x0+gx*cell, py=y0+yMain*cell; ctx.save(); ctx.globalAlpha=0.92; drawTile(ctx, px, py, cell, a.color); ctx.restore();
+					for(let t=1;t<=trailCount;t++){ const yTrail=(yInterp-t*trailStep)+j; px=x0+gx*cell; py=y0+yTrail*cell; ctx.save(); ctx.globalAlpha=0.12*(1-t/(trailCount+0.5)); drawTile(ctx, px, py, cell, a.color); ctx.restore(); }
 				}
 			}
 		}
-		// Opp
-		for(let y=0;y<this.oppGrid.h;y++) for(let x=0;x<this.oppGrid.w;x++){ const v=this.oppGrid.cells[y][x]; if(v){ drawTile(ctx, x0+bw+gap+x*cell, y0+y*cell, cell, pieceColor(v)); } }
+		// Mini plateau adverse dans la sidebar
+		{
+			const miniCell = Math.max(8, Math.floor(Math.min((sideW-32)/this.oppGrid.w, (sideH-64)/this.oppGrid.h)));
+			const mx = sideX + Math.floor((sideW - this.oppGrid.w*miniCell)/2);
+			const my = sideY + Math.floor((sideH - this.oppGrid.h*miniCell)/2);
+			drawInner(ctx, mx, my, this.oppGrid.w*miniCell, this.oppGrid.h*miniCell);
+			for(let y=0;y<this.oppGrid.h;y++) for(let x=0;x<this.oppGrid.w;x++){ const v=this.oppGrid.cells[y][x]; if(v){ drawTile(ctx, mx+x*miniCell, my+y*miniCell, miniCell, pieceColor(v)); } }
+			if(this.oppActive){
+				const mat=this.oppActive.mat; const yAct=Math.floor(this.oppActive.y||0); const xAct=this.oppActive.x|0; const col=pieceColor(this.oppActive.key);
+				for(let j=0;j<4;j++){
+					for(let i=0;i<4;i++){
+						if(!mat[j][i]) continue; const gx=xAct+i, gy=yAct+j; if(gx<0||gx>=this.oppGrid.w) continue;
+						const px=mx+gx*miniCell, py=my+gy*miniCell; ctx.save(); if(gy<0) ctx.globalAlpha=0.45; drawTile(ctx, px, py, miniCell, col); ctx.restore();
+					}
+				}
+				const gy = computeGhostY(this.oppGrid, this.oppActive, xAct, yAct);
+				for(let j=0;j<4;j++){
+					for(let i=0;i<4;i++){
+						if(!mat[j][i]) continue; const gx=xAct+i, gy2=gy+j; if(gx<0||gx>=this.oppGrid.w) continue;
+						const px=mx+gx*miniCell, py=my+gy2*miniCell; ctx.save(); ctx.globalAlpha=(gy2<0?0.35:0.7); drawGhostCell(ctx, px, py, miniCell); ctx.restore();
+					}
+				}
+			}
+		}
 		if(this.oppActive){
 			// Pièce active adverse, avec transparence au-dessus
 			const mat=this.oppActive.mat; const yAct=Math.floor(this.oppActive.y||0); const xAct=this.oppActive.x|0; const col=pieceColor(this.oppActive.key);
@@ -161,8 +194,8 @@ export class MultiplayerGameScreen extends BaseGameScreen{
 	getBoardRect(){ return this._boardRect; }
 
 	// Hooks BaseGameScreen
-	onRotate(){ const r=rotateCW(this.active.mat); if(!collide(this.grid,{mat:r},this.x,this.y)) this.active.mat=r; }
-	onRotateCCW(){ const r=rotateCW(rotateCW(rotateCW(this.active.mat))); if(!collide(this.grid,{mat:r},this.x,this.y)) this.active.mat=r; }
+	onRotate(){ const r=rotateCW(this.active.mat); tryApplyRotation(this, r); }
+	onRotateCCW(){ const r=rotateCW(rotateCW(rotateCW(this.active.mat))); tryApplyRotation(this, r); }
 	onHardDrop(){
 		// Préparer animation
 		const startY = Math.floor(this.y);
@@ -171,7 +204,7 @@ export class MultiplayerGameScreen extends BaseGameScreen{
 		const color = pieceColor(this.active.key);
 		const finalCells = []; for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(pieceCopy.mat[j][i]) finalCells.push({ x:this.x+i, y:endY+j });
 		const dist = Math.max(0, (endY - startY));
-		const dur = Math.max(0.09, Math.min(0.22, 0.06 + dist*0.015));
+		const dur = Math.max(0.05, Math.min(0.12, 0.04 + dist*0.008));
 		this._dropAnim = { mat: pieceCopy.mat, color, x:this.x, yStart:startY, yEnd:endY, t:0, dur, finalCells };
 		// Verrouiller immédiatement pour le gameplay et envoyer l'état
 		this.y = endY; while(!collide(this.grid,this.active,this.x,this.y+1)) this.y++; // s'assure d'être posé
@@ -207,7 +240,7 @@ function lock(self){
 	if(cleared>0){ try{ self.noteLineClear?.(cleared); }catch{} }
 	// Nouvelle pièce
 	self.active = spawn(self.bag);
-	self.x=3; self.y=0; self.lockTimer=0;
+	self.x=3; self.y=0; self.lockTimer=0; self.dropAcc=0;
 	// Top-out KO à l'apparition
 	if(collide(self.grid, self.active, self.x, self.y)){
 		self.triggerGameOver?.();
@@ -218,6 +251,12 @@ function drawInner(ctx, x,y,w,h){ ctx.save(); ctx.fillStyle='#0e1216'; ctx.fillR
 function drawMat(ctx,mat,x0,y0,cell,color){ for(let j=0;j<4;j++){ for(let i=0;i<4;i++){ if(!mat[j][i]) continue; const x=x0+i*cell, y=y0+j*cell; drawTile(ctx, x, y, cell, color); } } }
 function pieceColor(key){ return { I:'#22d3ee', O:'#fbbf24', T:'#a78bfa', S:'#22c55e', Z:'#ef4444', J:'#60a5fa', L:'#fb923c' }[key] || (typeof key==='string'? key : '#60a5fa'); }
 function drawTile(ctx, x,y, size, color){ ctx.save(); const g=ctx.createLinearGradient(x,y,x,y+size); g.addColorStop(0, shade(color, 18)); g.addColorStop(1, shade(color,-14)); ctx.fillStyle=g; ctx.fillRect(x+1,y+1,size-2,size-2); ctx.restore(); }
+function tryApplyRotation(self, newMat){
+	const kicks = [0, -1, 1, -2, 2];
+	for(const dx of kicks){ if(!self.grid.collide(newMat, self.x+dx, Math.floor(self.y))){ self.active.mat = newMat; if(dx) self.x += dx; return true; } }
+	if(!self.grid.collide(newMat, self.x, Math.floor(self.y)-1)){ self.active.mat = newMat; self.y = Math.floor(self.y)-1; return true; }
+	return false;
+}
 function shade(hex, percent){ const {r,g,b}=hexToRgb(hex); const f=(v)=> Math.max(0, Math.min(255, Math.round(v + (percent/100)*255))); return rgbToHex(f(r),f(g),f(b)); }
 function hexToRgb(hex){ const h=String(hex).replace('#',''); const n=parseInt(h.length===3 ? h.split('').map(c=>c+c).join('') : h,16); return { r:(n>>16)&255, g:(n>>8)&255, b:n&255 }; }
 function rgbToHex(r,g,b){ const to=(v)=> v.toString(16).padStart(2,'0'); return `#${to(r)}${to(g)}${to(b)}`; }

@@ -1,60 +1,35 @@
 import { AudioFX } from './audio.js';
 
+// --- Modale Crédits ---
+document.addEventListener('DOMContentLoaded', function() {
+  const btnCredits = document.getElementById('btn-credits');
+  const modalCredits = document.getElementById('modal-credits');
+  const btnCloseCredits = document.getElementById('btn-close-credits');
+  if(btnCredits && modalCredits) {
+    btnCredits.addEventListener('click', function() {
+      modalCredits.classList.remove('hidden');
+    });
+  }
+  if(btnCloseCredits && modalCredits) {
+    btnCloseCredits.addEventListener('click', function() {
+      modalCredits.classList.add('hidden');
+    });
+  }
+});
+
 // Constantes jeu
 const COLS = 10;
 const ROWS = 20;
 let TILE = 30; // pixels (ajustable)
 const START_SPEED_MS = 800; // intervalle de chute initial
 const SPEEDUP_EVERY_MS = 30000; // +vite toutes les 30s
-// Système de 10 niveaux nommés
-const LEVEL_NAMES = [
-  'Pepouz', 'Tranquille', 'Cool', 'Posé', 'Rapide',
-  'Furie', 'Chaud', 'Intense', 'Enfer 1', 'Enfer 2', 'Enfer 3'
-];
 
-// Pièces Tetris (Tetrominos) - matrices 4x4
-const TETROMINOS = {
-  I: [ [0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0] ],
-  O: [ [0,0,0,0],[0,1,1,0],[0,1,1,0],[0,0,0,0] ],
-  T: [ [0,1,0,0],[1,1,1,0],[0,0,0,0],[0,0,0,0] ],
-  S: [ [0,1,1,0],[1,1,0,0],[0,0,0,0],[0,0,0,0] ],
-  Z: [ [1,1,0,0],[0,1,1,0],[0,0,0,0],[0,0,0,0] ],
-  J: [ [1,0,0,0],[1,1,1,0],[0,0,0,0],[0,0,0,0] ],
-  L: [ [0,0,1,0],[1,1,1,0],[0,0,0,0],[0,0,0,0] ],
-};
-const SHAPES = Object.keys(TETROMINOS);
-
-// Couleurs acier/carbone déclinées
-const COLORS = {
-  I: '#8AA3B2',
-  O: '#9AA0A8',
-  T: '#7D8AA0',
-  S: '#8E9AA5',
-  Z: '#8E949B',
-  J: '#7F8C99',
-  L: '#9BA7B3',
-};
-
-function randi(n){ return Math.floor(Math.random()*n); }
-function clone(m){ return JSON.parse(JSON.stringify(m)); }
-function rotateCW(m){
-  const N=4; const r=Array.from({length:N},()=>Array(N).fill(0));
-  for(let y=0;y<N;y++)for(let x=0;x<N;x++) r[x][N-1-y]=m[y][x];
-  return r;
-}
-
-// Leaderboard côté serveur
-// Origine du serveur (HTTP/WS):
-// - En production Netlify: définir VITE_SERVER_ORIGIN (ex: https://mon-backend.example.com)
-// - En développement: fallback vers localhost:8787
+// Utilitaires serveur (restaurés)
 function getServerOrigin(){
   try{
     const env = (import.meta && import.meta.env) || {};
-    // 1) Dev: utiliser le proxy Vite (base relative)
     if(env.DEV){ return ''; }
-    // 2) Config explicite
     if(env.VITE_SERVER_ORIGIN){ return String(env.VITE_SERVER_ORIGIN).replace(/\/$/,''); }
-    // 3) Production même origine (dist servi par Express)
     return `${location.protocol}//${location.host}`;
   }catch{
     return '';
@@ -62,13 +37,13 @@ function getServerOrigin(){
 }
 async function apiTop10List(mode){
   try{
-  const base = getServerOrigin();
-  const bust = `bust=${Date.now()}`;
-  const url = mode ? `${base}/top10?mode=${encodeURIComponent(mode)}&${bust}` : `${base}/top10?${bust}`;
-  const res = await fetch(url, { cache:'no-store' });
-  const data = await res.json();
-  if(mode){ return Array.isArray(data.list)? data.list : []; }
-  return { solo: Array.isArray(data.solo)?data.solo:[], multi: Array.isArray(data.multi)?data.multi:[] };
+    const base = getServerOrigin();
+    const bust = `bust=${Date.now()}`;
+    const url = mode ? `${base}/top10?mode=${encodeURIComponent(mode)}&${bust}` : `${base}/top10?${bust}`;
+    const res = await fetch(url, { cache:'no-store' });
+    const data = await res.json();
+    if(mode){ return Array.isArray(data.list)? data.list : []; }
+    return { solo: Array.isArray(data.solo)?data.solo:[], multi: Array.isArray(data.multi)?data.multi:[] };
   }catch{ return []; }
 }
 async function apiTop10Push(name, score, durationMs, mode){
@@ -77,14 +52,80 @@ async function apiTop10Push(name, score, durationMs, mode){
     const sc = Math.max(0, Number(score||0));
     const dur = Math.max(0, Number(durationMs||0));
     const ln = Math.max(0, Number(linesClearedTotal||0));
-  const body = { name, score: sc, durationMs: dur, lines: ln, mode: mode||'solo' };
-  await fetch(`${base}/top10`, { method:'POST', headers:{ 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const body = { name, score: sc, durationMs: dur, lines: ln, mode: mode||'solo' };
+    await fetch(`${base}/top10`, { method:'POST', headers:{ 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   }catch{}
 }
-
-
-// DOM refs
+// Canvas principal du jeu
 const cvs = document.getElementById('game');
+// Canvas d'effets au-dessus du voile (id="hero-fx")
+const heroFx = document.getElementById('hero-fx');
+if(heroFx){
+  const hctx = heroFx.getContext('2d');
+  let beams = [];
+  const BEAM_COUNT = 7;
+  function initBeams(){
+    beams = [];
+    for(let i=0;i<BEAM_COUNT;i++){
+      beams.push({
+        x: Math.random()*heroFx.width,
+        y: Math.random()*heroFx.height,
+        angle: Math.random()*Math.PI*2,
+        speed: 0.6+Math.random()*0.6,
+        width: 120+Math.random()*80,
+        length: 420+Math.random()*240,
+        alpha: 0.28+Math.random()*0.15
+      });
+    }
+  }
+  function drawBeams(){
+    hctx.clearRect(0,0,heroFx.width,heroFx.height);
+    for(const b of beams){
+      hctx.save();
+      hctx.globalAlpha = b.alpha;
+      hctx.translate(b.x,b.y);
+      hctx.rotate(b.angle);
+      const grad = hctx.createLinearGradient(0,0,0,b.length);
+      grad.addColorStop(0, 'rgba(255,255,230,0.38)');
+      grad.addColorStop(0.2,'rgba(210,230,255,0.22)');
+      grad.addColorStop(0.6,'rgba(140,190,255,0.10)');
+      grad.addColorStop(1, 'rgba(80,120,180,0)');
+      hctx.fillStyle = grad;
+      hctx.beginPath();
+      hctx.moveTo(-b.width/2,0);
+      hctx.lineTo(b.width/2,0);
+      hctx.lineTo(b.width/2.2,b.length);
+      hctx.lineTo(-b.width/2.2,b.length);
+      hctx.closePath();
+      hctx.shadowColor = 'rgba(255,255,230,0.35)';
+      hctx.shadowBlur = 42;
+      hctx.fill();
+      hctx.restore();
+    }
+  }
+  function animate(){
+    for(const b of beams){
+      b.x += Math.cos(b.angle)*b.speed;
+      b.y += Math.sin(b.angle)*b.speed;
+      b.angle += (Math.random()-0.5)*0.0045;
+      if(b.x< -200 || b.x> heroFx.width+200 || b.y< -200 || b.y> heroFx.height+200){
+        b.x = Math.random()*heroFx.width;
+        b.y = Math.random()*heroFx.height;
+        b.angle = Math.random()*Math.PI*2;
+      }
+    }
+    drawBeams();
+    requestAnimationFrame(animate);
+  }
+  function resize(){
+    heroFx.width = heroFx.offsetWidth;
+    heroFx.height = heroFx.offsetHeight;
+    initBeams();
+  }
+  window.addEventListener('resize', resize);
+  resize();
+  animate();
+}
 
 // --------- Compteur 5s piloté par serveur ---------
 function onServerCountdown(seconds){
@@ -1636,6 +1677,8 @@ try{
     const btnHelp = document.getElementById('btn-help');
     const dlgHelp = document.getElementById('dlg-help');
     const helpClose = document.getElementById('help-close');
+    // Masquer la modale aide au chargement
+    if(dlgHelp && typeof dlgHelp.close === 'function') dlgHelp.close();
     if(btnHelp && dlgHelp){ btnHelp.addEventListener('click', ()=> dlgHelp.showModal()); }
     if(helpClose && dlgHelp){ helpClose.addEventListener('click', ()=> dlgHelp.close()); }
   }catch{}

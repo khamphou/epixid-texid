@@ -2914,12 +2914,18 @@ function fitBoardToContainer(){
     }
   }
   // Fit to container (mobile):
-  // 1) Largeur réelle du conteneur boards (en mobile: pleine largeur moins sidebar)
+  const appEl = document.getElementById('app');
+  const isObserverMobile = !!(appEl && appEl.classList && appEl.classList.contains('observer-mode'));
+  // 1) Largeur réelle du conteneur boards (en mobile: pleine largeur moins sidebar, sauf observer-mode où la sidebar passe dessous)
   let availW = (()=>{
     try{
       const layout = document.querySelector('#app .layout');
       const sidebar = document.querySelector('#app .sidebar');
       let layoutW = layout && layout.clientWidth ? layout.clientWidth : (window.innerWidth - 24);
+      if(isObserverMobile){
+        // Sidebar en dessous: 100% pour les deux plateaux
+        return Math.max(120, layoutW);
+      }
       // Estimer largeur sidebar selon breakpoints (voir CSS @media)
       let sbW = 0;
       const mq420 = window.matchMedia && window.matchMedia('(max-width: 420px)').matches;
@@ -2948,7 +2954,15 @@ function fitBoardToContainer(){
   }catch{}
   // 3) Le canvas est dans .frame (padding 10, bordure ≈ 2) -> extra ≈ 22 px en largeur, 20px en hauteur
   const frameExtraW = 22, frameExtraH = 20;
-  const maxCanvasWByWidth = Math.max(100, Math.floor(availW - frameExtraW - 4));
+  let maxCanvasWByWidth;
+  if(isObserverMobile){
+    // Deux plateaux côte à côte -> partager la largeur (incluant l'espace entre)
+    const boardsGap = 8; // synchronisé avec CSS observer-mode
+    const totalExtras = (frameExtraW*2) + boardsGap + 4;
+    maxCanvasWByWidth = Math.max(100, Math.floor((availW - totalExtras) / 2));
+  } else {
+    maxCanvasWByWidth = Math.max(100, Math.floor(availW - frameExtraW - 4));
+  }
   const maxCanvasWByHeight = Math.max(100, Math.floor((vh - frameExtraH) / 2)); // ratio 1:2
   const targetCanvasW = Math.max(120, Math.min(maxCanvasWByWidth, maxCanvasWByHeight));
   // 4) Recalcul TILE (entier) à partir de la largeur visée du canvas
@@ -2967,6 +2981,15 @@ function fitBoardToContainer(){
     oppCvs.style.width = pxW + 'px';
     oppCvs.style.height = pxH + 'px';
   }
+  // Observer right canvas (si présent)
+  try{
+    if(typeof obsRightCvs !== 'undefined' && obsRightCvs){
+      if(obsRightCvs.width !== pxW) obsRightCvs.width = pxW;
+      if(obsRightCvs.height !== pxH) obsRightCvs.height = pxH;
+      obsRightCvs.style.width = pxW + 'px';
+      obsRightCvs.style.height = pxH + 'px';
+    }
+  }catch{}
   // appliquer tailles CSS pour l’affichage (peuvent différer légèrement)
   cvs.style.width = pxW + 'px';
   cvs.style.height = pxH + 'px';
@@ -2992,7 +3015,11 @@ function updateOpponentVisibility(){
   }
   try{
     const app = document.getElementById('app');
-    if(app){ app.classList.toggle('solo-mode', !roomId && !observingRoom); }
+    if(app){
+      app.classList.toggle('solo-mode', !roomId && !observingRoom);
+      // En mode observateur, activer une classe dédiée pour le layout mobile
+      app.classList.toggle('observer-mode', !!(observingRoom && !roomId));
+    }
   }catch{}
   if(panelMP){ panelMP.classList.toggle('hidden', !roomId && !observingRoom); }
   // Positionner le panneau MP selon le breakpoint (mobile: plein largeur sous les plateaux)

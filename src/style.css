@@ -450,6 +450,18 @@ canvas.fx{position:absolute;left:10px;top:10px;pointer-events:none;mix-blend-mod
   .top10.neon li{padding:6px 2px}
   .top10.neon li .line{gap:6px}
   .top10.neon li .dots{max-width:50%}
+
+  /* ===== Mode Observateur (mobile): 2 plateaux côte à côte, sidebar en dessous ===== */
+  #app.observer-mode .layout{ grid-template-columns: 1fr; grid-template-areas: "boards" "sidebar"; gap:8px }
+  #app.observer-mode .boards{ grid-area: boards; grid-template-columns: 1fr 1fr; justify-content:center; width:auto; gap:8px; margin-top:4px }
+  #app.observer-mode #board-obs-right{ display:flex !important }
+  #app.observer-mode #board-opp{ display:none !important }
+  /* Sidebar passe en dessous et en colonnes */
+  #app.observer-mode .sidebar{ grid-area: sidebar; display:grid; grid-template-columns: 1fr 1fr; gap:8px }
+  #app.observer-mode .sidebar > .panel{ min-width:0 }
+  /* Cacher les panneaux non pertinents pour l'observateur en mobile */
+  #app.observer-mode .sidebar .panel.next,
+  #app.observer-mode .sidebar .panel.opp-preview{ display:none !important }
 }
 
 /* Palier plus petit: ≤600px */

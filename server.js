@@ -37,7 +37,15 @@ app.use((req, res, next)=>{
 const lastHelloByCid = new Map();
 
 // In-memory rooms
-// id -> { id, clients:Set<ws>, observers:Set<ws>, ready:Set<ws>, started:boolean, seed:string|null, done:Set<ws>, scores:Map<ws,number>, lines:Map<ws,number>, levels:Map<ws,number>, startedAt:number|null, countdownTimer: NodeJS.Timeout|null }
+// id -> {
+//   id,
+//   clients:Set<ws>, observers:Set<ws>, ready:Set<ws>,
+//   started:boolean, seed:string|null, done:Set<ws>,
+//   scores:Map<ws,number>, lines:Map<ws,number>, levels:Map<ws,number>,
+//   grids:Map<ws,Array<Array<string|null>>> , // dernier snapshot de la grille envoyé par chaque joueur
+//   actives:Map<ws,any>, // dernière pièce active {key,mat,x,y} ou null
+//   startedAt:number|null, countdownTimer: NodeJS.Timeout|null
+// }
 const rooms = new Map();
 
 function makeId(){
@@ -400,7 +408,7 @@ wss.on('connection', (ws)=>{
         return send(ws, { type:'error', message:'Vous possédez déjà un salon.' });
       }
     const id = makeId();
-  const r = { id, name: (msg.name||null), ownerName: (msg.ownerName||null), ownerTop: Number(msg.ownerTop||0), clients: new Set(), observers: new Set(), ready: new Set(), started: false, seed: null, done: new Set(), scores: new Map(), lines: new Map(), levels: new Map(), startedAt: null, owner: ws, ownerAddr: ip||null, ownerPid: ws.pid||null, countdownTimer: null, lastEndedTs: null };
+  const r = { id, name: (msg.name||null), ownerName: (msg.ownerName||null), ownerTop: Number(msg.ownerTop||0), clients: new Set(), observers: new Set(), ready: new Set(), started: false, seed: null, done: new Set(), scores: new Map(), lines: new Map(), levels: new Map(), grids: new Map(), actives: new Map(), startedAt: null, owner: ws, ownerAddr: ip||null, ownerPid: ws.pid||null, countdownTimer: null, lastEndedTs: null };
       rooms.set(id, r);
       ws.ownsRoomId = id;
       join(ws, id);
@@ -411,7 +419,7 @@ wss.on('connection', (ws)=>{
   for(const c of wss.clients){ try{ c.send(JSON.stringify({ type:'rooms', rooms: roomInfo() })); c.send(JSON.stringify({ type:'players', players: playersInfo() })); }catch{} }
     } else if(type === 'join'){
   const id = msg.room;
-  if(!rooms.has(id)) rooms.set(id, { id, name:null, ownerName:null, ownerTop:0, clients: new Set(), observers: new Set(), ready:new Set(), started:false, seed:null, done:new Set(), scores:new Map(), lines:new Map(), levels:new Map(), startedAt:null, owner: null, countdownTimer: null, lastEndedTs: null });
+  if(!rooms.has(id)) rooms.set(id, { id, name:null, ownerName:null, ownerTop:0, clients: new Set(), observers: new Set(), ready:new Set(), started:false, seed:null, done:new Set(), scores:new Map(), lines:new Map(), levels:new Map(), grids:new Map(), actives:new Map(), startedAt:null, owner: null, countdownTimer: null, lastEndedTs: null });
       join(ws, id);
       // Informer seulement le nouvel entrant des états "ready" existants (ex: hôte prêt par défaut)
       try{
@@ -436,6 +444,13 @@ wss.on('connection', (ws)=>{
         }
         // Persist per-player level for accurate score snapshots
         try{ r.levels && r.levels.set(ws, Math.max(1, Number(msg.level||1))); }catch{}
+        // Snapshot complet pour nouveaux observateurs
+        try{
+          if(!r.grids) r.grids = new Map();
+          if(!r.actives) r.actives = new Map();
+          if(msg.grid) r.grids.set(ws, msg.grid);
+          r.actives.set(ws, msg.active || null);
+        }catch{}
         // Build a complete score list including level/lines/ready
         const scoreList = Array.from(r.clients).map(c=>({
           id: c.id,
@@ -477,6 +492,15 @@ wss.on('connection', (ws)=>{
       // send initial snapshot
       const scoreList = Array.from(r.clients).map(c=>({ id: c.id, name: c.name||null, score: r.scores.get(c)||0, lines: (r.lines && r.lines.get(c)) || 0, level: (r.levels && r.levels.get(c)) || 1, ready: !!(r.ready && r.ready.has(c)) }));
       send(ws, { type:'scores', room: r.id, list: scoreList });
+      // Envoyer également la dernière grille/active de chaque joueur pour éviter les plateaux vides
+      try{
+        const emptyGrid = Array.from({length:20},()=>Array(10).fill(null));
+        for(const c of r.clients){
+          const gridSnap = (r.grids && r.grids.get(c)) || emptyGrid;
+          const activeSnap = (r.actives && (r.actives.has(c) ? r.actives.get(c) : null)) || null;
+          send(ws, { type:'state', room: r.id, who: c.id, grid: gridSnap, score: r.scores.get(c)||0, active: activeSnap, level: (r.levels && r.levels.get(c))||1, lines: (r.lines && r.lines.get(c))||0, ready: !!(r.ready && r.ready.has(c)) });
+        }
+      }catch{}
     } else if(type === 'unobserve'){
       const id = ws.observe; if(!id || !rooms.has(id)) return;
       const r = rooms.get(id); r.observers?.delete(ws); ws.observe = null; pushSpectators(r);
@@ -513,7 +537,7 @@ wss.on('connection', (ws)=>{
   // mirror ready to observers
   try{ if(r.observers && r.observers.size){ for(const o of r.observers){ send(o, { type:'ready', room: r.id, who: ws.id, ready: msg.ready }); } } }catch{}
       // if two clients are ready and not started -> start with 5s countdown
-      if(r.clients.size === 2 && r.ready.size === 2 && !r.started){
+  if(r.clients.size === 2 && r.ready.size === 2 && !r.started){
         if(!r.countdownTimer){
           for(const c of r.clients){ send(c, { type:'countdown', seconds: 5 }); }
           if(r.observers && r.observers.size){ for(const o of r.observers){ send(o, { type:'countdown', room: r.id, seconds: 5 }); } }
@@ -525,7 +549,7 @@ wss.on('connection', (ws)=>{
               r.startedAt = Date.now();
               r.done.clear();
               r.scores.clear();
-              r.lines.clear?.(); r.levels?.clear?.();
+      r.lines.clear?.(); r.levels?.clear?.(); r.grids?.clear?.(); r.actives?.clear?.();
               // initialiser les scores à 0 et level=1 pour chaque joueur
               for(const c of r.clients){ r.scores.set(c, 0); try{ r.lines.set(c, 0); }catch{} try{ r.levels && r.levels.set(c, 1); }catch{} }
               // notifier un reset des scores (enrichi)
@@ -550,7 +574,7 @@ wss.on('connection', (ws)=>{
       r.ready.add(ws);
       try{ console.log(`[REPLAY] request: room=${r.id} by=${ws.name||ws.id} readyCount=${r.ready.size}/${r.clients.size}`); }catch{}
       broadcast(ws, { type: 'ready', who: ws.id, ready: true }, true);
-      if(r.clients.size === 2 && r.ready.size === 2 && !r.started){
+  if(r.clients.size === 2 && r.ready.size === 2 && !r.started){
         if(!r.countdownTimer){
           for(const c of r.clients){ send(c, { type:'countdown', seconds: 5 }); }
           if(r.observers && r.observers.size){ for(const o of r.observers){ send(o, { type:'countdown', room: r.id, seconds: 5 }); } }
@@ -561,7 +585,7 @@ wss.on('connection', (ws)=>{
               r.startedAt = Date.now();
               r.done.clear();
               r.scores.clear();
-              r.lines.clear?.(); r.levels?.clear?.();
+      r.lines.clear?.(); r.levels?.clear?.(); r.grids?.clear?.(); r.actives?.clear?.();
               for(const c of r.clients){ r.scores.set(c, 0); try{ r.lines.set(c, 0); }catch{} try{ r.levels && r.levels.set(c, 1); }catch{} }
               const initScores2 = Array.from(r.clients).map(c=>({ id: c.id, name: c.name||null, score: 0, lines: 0, level: 1, ready: !!(r.ready && r.ready.has(c)) }));
               for(const c of r.clients){ send(c, { type:'scores', list: initScores2 }); }
@@ -577,7 +601,11 @@ wss.on('connection', (ws)=>{
     } else if(type === 'gameover'){
       const r = ws.room && rooms.get(ws.room); if(!r) return;
       r.done.add(ws);
+  // Marquer active à null et conserver la dernière grille pour les nouveaux observateurs
+  try{ if(r.actives){ r.actives.set(ws, null); } }catch{}
       broadcast(ws, { type: 'gameover', who: ws.id }, true);
+  // Informer aussi les observateurs pour qu'ils puissent afficher l'état du perdant
+  try{ if(r.observers && r.observers.size){ for(const o of r.observers){ send(o, { type:'gameover', room: r.id, who: ws.id }); } } }catch{}
       if(r.clients.size >= 2 && r.done.size >= 2){
   // match over
   const scores = Array.from(r.clients).map(c=>({ id: c.id, name: c.name||null, score: r.scores.get(c)||0, lines: (r.lines && r.lines.get(c)) || 0 }));
@@ -624,7 +652,7 @@ wss.on('connection', (ws)=>{
   if(r.countdownTimer){ clearTimeout(r.countdownTimer); r.countdownTimer = null; for(const c of r.clients){ send(c, { type:'countdown_cancel' }); } }
   if(r.observers && r.observers.size){ for(const o of r.observers){ send(o, { type:'countdown_cancel', room: id }); } }
   // reset state to allow clean relaunch on future reuse
-  r.started = false; r.seed = null; r.startedAt = null; r.ready.clear(); r.done.clear();
+  r.started = false; r.seed = null; r.startedAt = null; r.ready.clear(); r.done.clear(); r.grids?.clear?.(); r.actives?.clear?.();
   for(const c of r.clients){ send(c, { type:'room_closed', room: id }); c.room = null; }
   if(r.observers && r.observers.size){ for(const o of r.observers){ send(o, { type:'room_closed', room: id }); } }
   rooms.delete(id);
@@ -636,12 +664,13 @@ wss.on('connection', (ws)=>{
       const id = ws.room; if(!id) return;
       const r = rooms.get(id); if(!r) return;
   r.clients.delete(ws);
-      r.ready.delete(ws);
+    r.ready.delete(ws);
       r.done.delete(ws);
       r.scores.delete(ws);
+    try{ r.lines?.delete?.(ws); r.levels?.delete?.(ws); r.grids?.delete?.(ws); r.actives?.delete?.(ws); }catch{}
   if(r.countdownTimer){ clearTimeout(r.countdownTimer); r.countdownTimer = null; for(const c of r.clients){ send(c, { type:'countdown_cancel' }); } }
   // si quelqu'un part, reposer la salle à un état non démarré pour permettre une relance propre
-  r.started = false; r.seed = null; r.startedAt = null; r.ready.clear(); r.done.clear();
+  r.started = false; r.seed = null; r.startedAt = null; r.ready.clear(); r.done.clear(); r.grids?.clear?.(); r.actives?.clear?.();
       ws.room = null;
       // notify remaining peers
   const connected = r.clients.size >= 2;
@@ -662,6 +691,7 @@ wss.on('connection', (ws)=>{
       r.ready.delete(ws);
       r.done.delete(ws);
       r.scores.delete(ws);
+    try{ r.lines?.delete?.(ws); r.levels?.delete?.(ws); r.grids?.delete?.(ws); r.actives?.delete?.(ws); }catch{}
       // annuler un compte à rebours actif et informer les clients restants
       if(r.countdownTimer){
         clearTimeout(r.countdownTimer); r.countdownTimer = null;
@@ -669,7 +699,7 @@ wss.on('connection', (ws)=>{
         if(r.observers && r.observers.size){ for(const o of r.observers){ send(o, { type:'countdown_cancel', room: id }); } }
       }
   // Replacer la salle dans un état neutre pour permettre un nouveau compte à rebours
-  r.started = false; r.seed = null; r.ready.clear(); r.done.clear();
+  r.started = false; r.seed = null; r.ready.clear(); r.done.clear(); r.grids?.clear?.(); r.actives?.clear?.();
       if(r.clients.size === 0){
         rooms.delete(id);
         try{ console.log(`[ROOM] Détruit (close): room=${id}`); }catch{}
@@ -708,7 +738,7 @@ function broadcast(ws, obj, toOthers=false){
 
 function join(ws, id){
   // ensure room
-  if(!rooms.has(id)) rooms.set(id, { id, name:null, ownerName:null, ownerTop:0, clients: new Set(), observers:new Set(), ready:new Set(), started:false, seed:null, done:new Set(), scores:new Map(), lines:new Map(), startedAt:null, owner: null, countdownTimer: null, lastEndedTs: null });
+  if(!rooms.has(id)) rooms.set(id, { id, name:null, ownerName:null, ownerTop:0, clients: new Set(), observers:new Set(), ready:new Set(), started:false, seed:null, done:new Set(), scores:new Map(), lines:new Map(), levels:new Map(), grids:new Map(), actives:new Map(), startedAt:null, owner: null, countdownTimer: null, lastEndedTs: null });
   const r = rooms.get(id);
   if(r.clients.size >= 2){ send(ws,{ type:'error', message:'Room full' }); return; }
   r.clients.add(ws);

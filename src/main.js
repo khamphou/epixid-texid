@@ -3030,11 +3030,15 @@ function updateOpponentVisibility(){
   // Visibilité du bouton Easy: masqué en solo, sauf si le joueur s'appelle "kham"; visible en multi
   try{
     const easyBtn = document.getElementById('easy-btn');
+    const aiDD = document.getElementById('ai-dd');
     if(easyBtn){
-      const isSolo = !roomId && !observingRoom;
-      const isKham = (playerName||'').trim().toLowerCase() === 'kham';
-      if(isSolo && !isKham){ easyBtn.style.display = 'none'; }
-      else { easyBtn.style.display = ''; }
+  const isObserving = !!(observingRoom && !roomId);
+  const isSolo = !roomId && !observingRoom;
+  const isKham = (playerName||'').trim().toLowerCase() === 'kham';
+  // En mode observateur: jamais visible
+      if(isObserving){ easyBtn.style.display = 'none'; if(aiDD){ aiDD.classList.add('hidden'); easyBtn.setAttribute('aria-expanded','false'); } }
+  else if(isSolo && !isKham){ easyBtn.style.display = 'none'; }
+  else { easyBtn.style.display = ''; }
     }
   }catch{}
   // Cadre spectateur droit

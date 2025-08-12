@@ -3,7 +3,6 @@ import { Grid } from '../engine/grid.js';
 import { Bag } from '../engine/bag.js';
 import { TETROMINOS, rotateCW } from '../engine/piece.js';
 import { Scoring } from '../engine/scoring.js';
-import { Input } from '../engine/input.js';
 import { audio } from '../audio.js';
 
 export class MultiplayerGameScreen extends BaseGameScreen{
@@ -17,8 +16,7 @@ export class MultiplayerGameScreen extends BaseGameScreen{
 		this.grid = new Grid(10,20); this.bag=new Bag(); this.active=spawn(this.bag);
 		this.x=3; this.y=0; this.score=0; this.combo=-1; this.b2b=false; this.time=0; this.gravity=1.4; this.dropAcc=0; this.lockDelay=0.5; this.lockTimer=0;
 		this.scoring = new Scoring();
-		this.input = new Input({ dasMs: 110, arrMs: 16 });
-		this.input.start();
+		// Entrées centralisées dans BaseGameScreen (DAS/ARR, soft drop)
 		// Adversaire (aperçu minimal)
 		this.oppGrid = new Grid(10,20);
 		this.oppActive = null; // {key,mat,x,y}
@@ -51,7 +49,6 @@ export class MultiplayerGameScreen extends BaseGameScreen{
 		try{ audio.setMusicIntensity?.(0.3); }catch{}
 	}
 	dispose(){
-		this.input?.stop?.();
 		try{ this.ws?.send('leave', {}); }catch{}
 		try{ this.ws?.close?.(); }catch{}
 		this._off.forEach(off=>{ try{ off(); }catch{} }); this._off = [];
@@ -60,16 +57,13 @@ export class MultiplayerGameScreen extends BaseGameScreen{
 	update(dt){
 		if(this.gameOver){ super.update?.(dt); return; }
 		if(!this.started){ super.update?.(dt); return; }
+		// Traiter les entrées centralisées (DAS/ARR + soft drop) avant la gravité
+		super.update?.(dt);
 		this.time+=dt;
-		// Input horizontal
-		const dx = this.input.stepHorizontal(dt);
-		if(dx){ const step = Math.sign(dx); for(let i=0;i<Math.abs(dx);i++){ const nx=this.x+step; if(!collide(this.grid,this.active,nx,this.y)){ this.x=nx; this.lockTimer=0; } else break; } }
-		// Gravité simple
-		const soft = this.input.softDrop();
-		const gravityFactor = soft ? 20 : 1.4;
+		// Gravité simple (accélération soft drop via onSoftDropTick)
+		const gravityFactor = 1.4;
 		this.dropAcc += dt*this.gravity*gravityFactor;
 		while(this.dropAcc>=1){ this.dropAcc-=1; this.y+=1; if(collide(this.grid,this.active,this.x,this.y)){ this.y--; this.lockTimer+=dt; if(this.lockTimer>=this.lockDelay){ lock(this); this.sendState(); } break; } else { this.lockTimer=0; } }
-		super.update?.(dt);
 		// Envoyer un état régulier (incluant la grille et la pièce active)
 		this._stateT = (this._stateT||0) + dt;
 		if(this._stateT >= 0.08){ this._stateT = 0; this.sendState(); }

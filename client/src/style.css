@@ -101,3 +101,5 @@ canvas{display:block}
 .help-callout{margin:10px 0; padding:10px 12px; border:1px solid rgba(56,189,248,.25); background:linear-gradient(180deg, rgba(56,189,248,.08), rgba(56,189,248,.04)); color:#dbeafe; border-radius:10px}
 .help-callout strong{color:#7dd3fc}
 .help-callout em{font-style:normal; color:#eaffff}
+/* utils */
+.hidden{display:none}

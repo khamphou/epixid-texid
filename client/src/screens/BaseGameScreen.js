@@ -20,6 +20,14 @@ export class BaseGameScreen {
     this._pStart = null;
     this._pId = null;
     this._softDropHold = false;
+  // DAS/ARR intégrés (clavier) – valeurs par défaut adoucies
+  this._dasMs = (this.rules?.inputs?.dasMs ?? 140);
+  this._arrMs = (this.rules?.inputs?.arrMs ?? 20);
+  this._dir = 0;        // -1 gauche, +1 droite, 0 neutre
+  this._phase = 'idle'; // idle|initial|das|arr
+  this._dasT = 0; this._arrT = 0;
+  this._pendingInitial = 0; // premier pas immédiat
+  this._lastLeftClickAt = 0; // pour double-clic chute
     this._kbHandlers = {
       keydown: (e)=> this._onKeyDown(e),
       keyup: (e)=> this._onKeyUp(e),
@@ -68,14 +76,29 @@ export class BaseGameScreen {
   _onKeyDown(e){
     if(this.gameOver) return;
     if(['ArrowDown','ArrowUp','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
-    if(e.repeat) return;
-    if(e.key==='ArrowUp'){ this.onRotate?.(); }
-    else if(e.key===' '){ this.onHardDrop?.(); }
-    else if(e.key==='ArrowLeft'){ this.onMove?.(-1); }
-    else if(e.key==='ArrowRight'){ this.onMove?.(1); }
-    else if(e.key==='ArrowDown'){ this._softDropHold = true; }
+  this._trackKey(e, true);
+  if(e.key==='ArrowUp'){ this.onRotate?.(); return; }
+  if(e.key===' '){ this.onHardDrop?.(); return; }
+  if(e.key==='ArrowLeft'){ if(!e.repeat) this._setDir(-1); return; }
+  if(e.key==='ArrowRight'){ if(!e.repeat) this._setDir(1); return; }
+  if(e.key==='ArrowDown'){ this._softDropHold = true; return; }
   }
-  _onKeyUp(e){ if(e.key==='ArrowDown') this._softDropHold = false; }
+  _onKeyUp(e){
+  this._trackKey(e, false);
+  if(e.key==='ArrowDown') this._softDropHold = false;
+    if(e.key==='ArrowLeft' && !this._rightHeld()){ this._setDir(0); }
+    if(e.key==='ArrowRight' && !this._leftHeld()){ this._setDir(0); }
+    if(e.key==='ArrowLeft' && this._rightHeld()){ this._setDir(1); }
+    if(e.key==='ArrowRight' && this._leftHeld()){ this._setDir(-1); }
+  }
+
+  // Helpers état touches horizontales (sans KeyUp globaux supplémentaires)
+  _leftHeld(){ return !!(this._keys && this._keys['ArrowLeft']); }
+  _rightHeld(){ return !!(this._keys && this._keys['ArrowRight']); }
+  _trackKey(e, down){
+    this._keys = this._keys || {};
+    this._keys[e.key] = down;
+  }
 
   _onPointerDown(ev){
     if(this.gameOver) return;
@@ -95,15 +118,26 @@ export class BaseGameScreen {
     const end = { x: ev.clientX, y: ev.clientY, t: performance.now(), b: ev.button };
     const dx = end.x - this._pStart.x; const dy = end.y - this._pStart.y; const dt = end.t - this._pStart.t;
     const dist2 = dx*dx + dy*dy;
-    const TAP_MS = 220; const TAP_DIST = 12; // proche du legacy
+    const TAP_MS = 250; const TAP_DIST = 14; // tolérance légère
     // Tap court
     if(dt <= TAP_MS && dist2 <= (TAP_DIST*TAP_DIST)){
-      if((this._pStart.b ?? 0) === 2){ // clic droit => rotate
-        this.onRotate?.();
-      } else {
-        // Souris: clic gauche court = hard drop, tactile = rotate
-        if(ev.pointerType === 'mouse') this.onHardDrop?.(); else this.onRotate?.();
-      }
+      // Tactile/stylet: tap = rotation (héritage)
+      if(ev.pointerType !== 'mouse'){ this.onRotate?.(); return; }
+      // Souris: clic droit => rotation
+      if((this._pStart.b ?? 0) === 2){ this.onRotate?.(); return; }
+      // Souris: clic gauche - double-clic => hard drop; sinon déplacement vers le côté cliqué
+      const now = end.t;
+      const dbl = (now - (this._lastLeftClickAt||0)) <= 260;
+      this._lastLeftClickAt = now;
+      if(dbl){ this.onHardDrop?.(); return; }
+      try{
+        const br = this.getBoardRect?.();
+        if(br && br.w>0){
+          const cx = br.x + br.w/2;
+          const dir = (end.x < cx) ? -1 : 1;
+          this.onMove?.(dir);
+        }
+      }catch{}
       return;
     }
     // Flick rapide
@@ -116,6 +150,16 @@ export class BaseGameScreen {
 
   update(dt){
     if(!this._alive) return;
+    // Suivi des touches pour _leftHeld/_rightHeld (basé sur events keydown/keyup)
+    // Note: on mémorise à la volée ici pour simplifier la logique de recompute
+    // (les appels viennent des handlers)
+    
+    // Émission des pas horizontaux selon DAS/ARR
+    const steps = this._stepHorizontal(dt);
+    if(steps){
+      const step = Math.sign(steps);
+      for(let i=0;i<Math.abs(steps);i++){ this.onMove?.(step); }
+    }
     if(this._softDropHold){ this.onSoftDropTick?.(dt); }
     // Décroissance des toasts
     if(this._toasts.length){
@@ -164,6 +208,36 @@ export class BaseGameScreen {
 
   // API toasts
   toast(msg, { color, size=20, dur=1.4 }={}){ this._toasts.push({ msg, color, size, dur, t:0 }); }
+
+  // Implémentation DAS/ARR centralisée
+  _setDir(d){
+    if(d===this._dir) return;
+    this._dir = d;
+    if(d===0){ this._phase='idle'; this._dasT=0; this._arrT=0; this._pendingInitial=0; return; }
+    this._phase='initial'; this._dasT=0; this._arrT=0; this._pendingInitial = d; // premier pas immédiat
+  }
+  _stepHorizontal(dtSec){
+    // initial step
+    if(this._pendingInitial){ const s=this._pendingInitial; this._pendingInitial=0; this._phase='das'; return s; }
+    if(this._dir===0) return 0;
+    if(this._phase==='das'){
+      this._dasT += dtSec*1000;
+      if(this._dasT >= this._dasMs){
+        this._dasT = this._dasMs; // clamp
+        this._phase='arr';
+        this._arrT = 0;
+        return this._dir;
+      }
+      return 0;
+    }
+    if(this._phase==='arr'){
+      this._arrT += dtSec*1000;
+      let steps = 0;
+      while(this._arrT >= this._arrMs){ this._arrT -= this._arrMs; steps++; }
+      return steps ? steps * this._dir : 0;
+    }
+    return 0;
+  }
 
   // Hooks jeu
   noteLineClear(count){

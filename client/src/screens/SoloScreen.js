@@ -2,7 +2,6 @@ import { Grid } from '../engine/grid.js';
 import { Bag } from '../engine/bag.js';
 import { TETROMINOS, rotateCW } from '../engine/piece.js';
 import { Scoring } from '../engine/scoring.js';
-import { Input } from '../engine/input.js';
 import { Garbage } from '../engine/garbage.js';
 import { audio } from '../audio.js';
 import { BaseGameScreen } from './BaseGameScreen.js';
@@ -14,40 +13,51 @@ export class SoloScreen extends BaseGameScreen {
   }
   async init(){
     await super.init?.();
+    // Bouton "Nouvelle partie" visible en Solo/Training
+    try{
+      const btn = document.getElementById('btn-new');
+      if(btn){ btn.classList.remove('hidden'); btn.onclick = ()=> this.restart(); }
+    }catch{}
     this.grid = new Grid(10,20); this.bag=new Bag(); this.active=spawn(this.bag);
-    this.x=3; this.y=0; this.rot=0; this.score=0; this.combo=-1; this.b2b=false; this.time=0;
-    this.gravity = 1; this.dropAcc=0; this.lockDelay= (this.rules?.speed?.lockDelayMs||500)/1000; this.lockTimer=0; this.holdDown=false;
+  this.x=3; this.y=0; this.rot=0; this.score=0; this.combo=-1; this.b2b=false; this.time=0;
+  // Vitesse et délais depuis le YAML
+  const lockMs = this.rules?.speed?.lockDelayMs; this.lockDelay = (typeof lockMs==='number'? lockMs : 500)/1000;
+  // Gravité initiale (sera recalculée chaque frame via la gravityCurve)
+  const g0 = Array.isArray(this.rules?.speed?.gravityCurve) && this.rules.speed.gravityCurve.length ? this.rules.speed.gravityCurve[0].gravity : 1;
+  this.gravity = (typeof g0==='number' ? g0 : 1);
+  this.dropAcc=0; this.lockTimer=0; this.holdDown=false;
     this.scoring = new Scoring();
     this.garbage = new Garbage();
     // Hold / Next
     this.hold = null; this.holdUsed = false;
     this.nextQueue = [spawn(this.bag), spawn(this.bag), spawn(this.bag), spawn(this.bag), spawn(this.bag)];
-    this.input = new Input({ dasMs: this.rules?.inputs?.dasMs, arrMs: this.rules?.inputs?.arrMs });
-    this.input.start();
     // Audio: intensité musique
     this._musicT = 0; this._musicLevel = 0.2;
-    window.addEventListener('keydown', this.onKeyDown);
-    window.addEventListener('keyup', this.onKeyUp);
+  window.addEventListener('keydown', this.onKeyDown);
+  window.addEventListener('keyup', this.onKeyUp);
   }
   update(dt){
     if(this.gameOver) return; // freeze
     this.time+=dt; this.objectives?.tick?.(dt);
-    const g = this.rules?.speed?.gravityCurve||[]; if(g.length){ const t=this.time; let cur=g[0].gravity; for(const p of g){ if(t>=p.t) cur=p.gravity; } this.gravity = cur; }
-    // mouvements horizontaux répétés via input
-    const dx = this.input.stepHorizontal(dt);
-    if(dx){
-      const step = Math.sign(dx);
-      for(let i=0;i<Math.abs(dx);i++){
-        const nx = this.x + step;
-        if(!collide(this.grid,this.active,nx,this.y)){ this.x = nx; this.lockTimer=0; }
-        else break;
-      }
-    }
-    // soft drop
-    const soft = this.input.softDrop();
-    const gravityFactor = soft ? 24 : 1.6; // accélération du soft drop
+  // Entrées centralisées (DAS/ARR + soft drop) traitées avant la gravité
+  super.update?.(dt);
+  // Appliquer la gravityCurve YAML (paliers de vitesse)
+  const g = this.rules?.speed?.gravityCurve||[];
+  if(g.length){ const t=this.time; let cur=g[0].gravity; for(const p of g){ if(t>=p.t) cur=p.gravity; } this.gravity = (typeof cur==='number'? cur : 1); }
+  // Gravité de base; l'accélération soft drop est appliquée via onSoftDropTick()
+  const gravityFactor = 1.6;
     this.dropAcc += dt*this.gravity*gravityFactor;
-    while(this.dropAcc>=1){ this.dropAcc-=1; this.y+=1; if(collide(this.grid,this.active,this.x,this.y)) { this.y--; this.lockTimer+=dt; if(this.lockTimer>=this.lockDelay){ lock(this); if(this.checkObjectivesAndMaybeEnd()) return; } break; } else { this.lockTimer=0; } }
+    while(this.dropAcc>=1){
+      this.dropAcc-=1; this.y+=1;
+      if(collide(this.grid,this.active,this.x,this.y)) {
+        this.y--; this.lockTimer+=dt;
+        if(this.lockTimer>=this.lockDelay){
+          lock(this);
+          if(this.checkObjectivesAndMaybeEnd()) return;
+        }
+        break;
+      } else { this.lockTimer=0; }
+    }
     // garbage timers -> appliquer si écoulés
     const apply = this.garbage.tick(dt);
     if(apply>0){
@@ -73,7 +83,6 @@ export class SoloScreen extends BaseGameScreen {
       if(Math.abs(target - this._musicLevel) >= 0.05){ this._musicLevel = target; audio.setMusicIntensity?.(target); }
     }catch{} }
 
-    super.update?.(dt);
   }
   render(ctx){
     // Fond
@@ -147,10 +156,10 @@ export class SoloScreen extends BaseGameScreen {
 
     // Sidebar (toujours visible)
     drawPanelGlass(ctx, sideX, sideY, sideW, sideH);
-    drawLabelValue(ctx, sideX+14, sideY+22, 'Joueur', 'kham');
-    drawLabelValue(ctx, sideX+14, sideY+44, 'Niveau', 'Pepouz');
-    drawLabelValue(ctx, sideX+14, sideY+66, 'Score', String(this.scoring?.score||0), true);
-    drawLabelValue(ctx, sideX+14, sideY+88, 'Lignes', String(this.scoring?.lines||0));
+  drawLabelValue(ctx, sideX+14, sideY+22, 'Joueur', 'kham', false, sideW);
+  drawLabelValue(ctx, sideX+14, sideY+44, 'Niveau', 'Pepouz', false, sideW);
+  drawLabelValue(ctx, sideX+14, sideY+66, 'Score', String(this.scoring?.score||0), true, sideW);
+  drawLabelValue(ctx, sideX+14, sideY+88, 'Lignes', String(this.scoring?.lines||0), false, sideW);
 
     // Sous-panneaux Hold/Next
     const subTop = sideY + 110;
@@ -172,9 +181,10 @@ export class SoloScreen extends BaseGameScreen {
   }
   handleInput(){}
   dispose(){
+  try{ const btn=document.getElementById('btn-new'); if(btn){ btn.classList.add('hidden'); btn.onclick=null; } }catch{}
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
-    this.input?.stop?.();
+  this.input?.stop?.();
     super.dispose?.();
   }
   getBoardRect(){ return this._boardRect || { x:0,y:0,w:0,h:0,cell:24 }; }
@@ -216,6 +226,7 @@ function lock(self){
   const cleared=self.grid.clear();
   let tsp=null; if(self.active.key==='T' && cleared>0){ tsp = cleared===1? 'single' : cleared===2? 'double' : 'triple'; }
   self.scoring.onClear({ lines: cleared, tspin: tsp });
+  try{ self.objectives?.onClear?.({ lines: cleared, tspin: tsp, combo: self.scoring?.combo||0 }); }catch{}
   if(cleared>0){ try{ self.noteLineClear?.(cleared); }catch{} }
   self.combo = self.scoring.combo; self.b2b = self.scoring.b2b;
   const delaySec = (self.rules?.garbage?.delayMs ?? 600)/1000;
@@ -227,6 +238,10 @@ function lock(self){
   self.active = self.nextQueue.shift() || spawn(self.bag);
   self.nextQueue.push(spawn(self.bag));
   self.x=3; self.y=0; self.lockTimer=0; self.holdUsed=false;
+  // Top-out: si la nouvelle pièce spawn en collision, c'est fini
+  if(collide(self.grid, self.active, self.x, self.y)){
+  try{ self.triggerGameOver?.(); self.objectives?.onKO?.(); }catch{}
+  }
 }
 
 function drawPanel(ctx,x,y,w,h,title){ ctx.strokeStyle='#475569'; ctx.strokeRect(x,y,w,h); ctx.fillStyle='#94a3b8'; ctx.fillText(title, x+6, y+14); }
@@ -245,6 +260,16 @@ SoloScreen.prototype.swapHold = function(){
   }
   this.x=3; this.y=0; this.lockTimer=0;
   if(this.rules?.inputs?.holdConsumesLock){ this.holdUsed = true; }
+};
+
+// Redémarrage propre (réinitialise l’état et repart avec le même mode)
+SoloScreen.prototype.restart = function(){
+  // Récrée un SoloScreen avec les mêmes règles/objectifs
+  try{
+    const ctor = this.constructor; // SoloScreen
+    const next = new ctor(this.core, { rules: this.rules, objectives: this.objectives });
+    this.core.sm.replace(next);
+  }catch{}
 };
 
 // --- Helpers de rendu style legacy ---
@@ -326,12 +351,13 @@ function drawPanelGlass(ctx,x,y,w,h){
 
 function drawSubPanel(ctx,x,y,w,h){ ctx.save(); ctx.fillStyle='rgba(255,255,255,.04)'; roundRect(ctx, x, y, w, h, 10); ctx.fill(); ctx.restore(); }
 
-function drawLabelValue(ctx, x,y, label, value, strong=false){
+function drawLabelValue(ctx, x,y, label, value, strong=false, panelW=240){
   ctx.save();
   ctx.fillStyle='#c8cfda'; ctx.font='12px system-ui,Segoe UI,Roboto,Arial';
   ctx.fillText(label, x, y);
   ctx.textAlign='right'; ctx.fillStyle = strong ? '#ffffff' : '#e5e7eb'; ctx.font = strong ? 'bold 12px system-ui,Segoe UI,Roboto,Arial' : '12px system-ui,Segoe UI,Roboto,Arial';
-  ctx.fillText(value, x+Math.max(160, Math.min(240, (this._boardRect?.w||240)-40)), y);
+  const valueX = x + Math.max(160, Math.min(240, (panelW||240) - 40));
+  ctx.fillText(value, valueX, y);
   ctx.textAlign='left';
   ctx.restore();
 }

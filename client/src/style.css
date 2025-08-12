@@ -1,6 +1,7 @@
 /* Feuille de styles complète issue de la version legacy, adaptée au client modulaire */
 *{box-sizing:border-box}
-html,body,#app-root{height:100%}
+/* Ne pas donner 100% de hauteur à #app-root pour éviter un écran vide sous le hero */
+html,body{height:100%}
 body{
 	margin:0;
 	font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", Arial, "Apple Color Emoji", "Segoe UI Emoji";
@@ -10,6 +11,10 @@ body{
 	color:#e5e7eb;
 }
 canvas{display:block}
+/* Le canvas doit occuper toute la fenêtre visible lorsque le jeu est actif */
+#app-root>canvas{position:fixed; inset:0; width:100vw !important; height:100vh !important;}
+/* Laisser la topbar au-dessus */
+#topbar{z-index: 1000}
 
 /* Drawer latéral (Crédits) */
 .drawer{ position: fixed; inset: 0; z-index: 1200; display: block; pointer-events: none; opacity: 0; transition: opacity .18s ease; }
@@ -73,3 +78,22 @@ canvas{display:block}
 
 @keyframes float{ 0%,100%{ transform: translateY(0) } 50%{ transform: translateY(-4px) } }
 @keyframes halo{ 0%,100%{ opacity:.5 } 50%{ opacity:.7 } }
+
+/* Topbar (menu du haut en jeu) */
+.topbar{position:fixed; inset:0 0 auto 0; height:48px; display:flex; align-items:center; justify-content:space-between; padding:8px 10px; gap:10px; background:linear-gradient(180deg, rgba(0,0,0,.45), rgba(0,0,0,.2)); border-bottom:1px solid rgba(255,255,255,.06); z-index:20; -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px)}
+.topbar.hidden{display:none}
+.topbar .app-title{font-family:Orbitron,system-ui;font-weight:700;letter-spacing:.16em;color:#e5e7eb; margin:0; font-size:16px}
+.topbar .controls{display:flex; align-items:center; gap:8px}
+.topbar .btn{background:linear-gradient(180deg,#1e232b,#12151a);border:1px solid #2a2f37;color:#cdd3dd;border-radius:10px;padding:7px 10px;cursor:pointer}
+.topbar .btn:hover{border-color:#3a404b;color:#fff;box-shadow:0 0 0 2px rgba(56,189,248,.15)}
+.topbar .btn.danger{background:linear-gradient(180deg,#ef4444,#b91c1c);border:1px solid #7f1d1d;color:#fff}
+
+/* Modales (héritées du style legacy condensed) */
+.modal{border:none; padding:0; background:transparent}
+.modal::backdrop{background:rgba(0,0,0,.55); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px)}
+.modal .modal-content{background:linear-gradient(180deg,#0f1318,#0b0e12);border:1px solid #242933;border-radius:12px;padding:16px;min-width:280px;color:#d6dbea;box-shadow:0 20px 80px rgba(0,0,0,.55)}
+.modal .tabs-compact .tab{background:linear-gradient(180deg,#1e232b,#12151a);border:1px solid #2a2f37;color:#cdd3dd;border-radius:999px;padding:6px 10px;cursor:pointer;font-size:12px}
+.modal .tabs-compact .tab.active{border-color:#3a404b;color:#fff;box-shadow:0 0 0 2px rgba(56,189,248,.15)}
+.modal .modal-content h3{margin:0 0 8px 0; font-family: Orbitron, system-ui; color:#7dd3fc}
+.modal menu{display:flex; gap:8px; justify-content:flex-end; margin-top:12px}
+.modal .primary{background:#0b6b9e;border:1px solid #0c82c1;color:#eaf6ff;border-radius:8px;padding:8px 12px}

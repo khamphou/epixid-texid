@@ -28,6 +28,8 @@ export class ScreenManager{
   /** @param {IScreen} s */
   replace(s){ const old = this.stack.pop(); old?.dispose?.(); this.stack.push(s); s.init?.(); }
   pop(){ const old = this.stack.pop(); old?.dispose?.(); }
+  /** Vide complètement la pile et dispose chaque écran */
+  clear(){ while(this.stack.length){ const old = this.stack.pop(); try{ old?.dispose?.(); }catch{} } }
   update(dt){ this.top()?.update?.(dt); }
   render(){ const ctx = this.ctx; if(!ctx) return; ctx.clearRect(0,0,this.canvas.width, this.canvas.height); this.top()?.render?.(ctx); }
   handleInput(evt){ return this.top()?.handleInput?.(evt); }

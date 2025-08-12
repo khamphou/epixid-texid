@@ -10,6 +10,21 @@
   <link rel="stylesheet" href="./src/style.css" />
   </head>
   <body>
+    <!-- Barre supérieure (affichée en jeu) -->
+    <header id="topbar" class="topbar hidden" role="banner">
+      <div class="brand"><h1 class="app-title">TEXID</h1></div>
+      <div class="controls">
+        <button id="btn-top10" class="btn" title="Top 10" aria-label="Top 10">
+          <svg class="ico" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 21V8h6v13H9zm8 0V4h4v17h-4zM3 21v-9h4v9H3z"/></svg>
+        </button>
+        <button id="btn-help" class="btn" title="Aide" aria-label="Aide">
+          <svg class="ico" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92A3.5 3.5 0 0013 14h-2v-.5c0-.83.34-1.58.88-2.12l1.24-1.26a1.5 1.5 0 10-2.12-2.12c-.4.4-.62.94-.62 1.5H8a4 4 0 117.07 2.37z"/></svg>
+        </button>
+        <button id="btn-exit" class="btn danger" title="Quitter" aria-label="Quitter">
+          <svg class="ico" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10 17l5-5-5-5v10zm-6-9h2v8H4V8zm12-6H8a2 2 0 00-2 2v2h2V4h8v16H8v-2H6v2a2 2 0 002 2h8a2 2 0 002-2V4a2 2 0 00-2-2z"/></svg>
+        </button>
+      </div>
+    </header>
     <!-- Drawer Crédits (latéral droit) -->
     <div id="drawer-credits" class="drawer" aria-hidden="true" aria-labelledby="credits-title">
       <div class="drawer-backdrop" data-close="true"></div>
@@ -82,6 +97,45 @@
 
     <!-- Racine de l’app canvas -->
     <div id="app-root"></div>
+
+    <!-- Modale Top 10 -->
+    <dialog id="dlg-top10" class="modal">
+      <div class="modal-content">
+        <div class="hero-top10-header">
+          <h3>Top 10</h3>
+          <div class="tabs tabs-compact" role="tablist" aria-label="Classements">
+            <button id="tab-top-solo" class="tab active" role="tab" aria-selected="true" aria-controls="top10-solo">Solo</button>
+          </div>
+          <button id="top10-close-x" class="btn" aria-label="Fermer"></button>
+        </div>
+        <div class="tabpanes">
+          <div id="top10-solo" role="tabpanel" aria-labelledby="tab-top-solo">
+            <ol id="top10-modal-solo" class="top10 neon"></ol>
+          </div>
+        </div>
+      </div>
+    </dialog>
+
+    <!-- Modale Aide / Contrôles -->
+    <dialog id="dlg-help" class="modal">
+      <div class="modal-content">
+        <h3>Aide & Contrôles</h3>
+        <div class="help-body">
+          <ul>
+            <li>← →: déplacer</li>
+            <li>↑: rotation</li>
+            <li>↓: descente</li>
+            <li>Espace: chute</li>
+            <li>C / Shift: hold</li>
+            <li>P: pause</li>
+          </ul>
+          <p class="small">Astuce: activez le Mode Easy pour les guides de projection.</p>
+        </div>
+        <menu>
+          <button id="help-close" class="primary">Fermer</button>
+        </menu>
+      </div>
+    </dialog>
 
     <script type="module" src="./src/main.js"></script>
   </body>

@@ -273,6 +273,11 @@ export class BaseGameScreen {
     else if(count===3) this.toast('TRIPLE', { color:'#93c5fd', size:22 });
     else if(count===2) this.toast('DOUBLE', { color:'#a7f3d0', size:20 });
     else if(count===1) this.toast('SINGLE', { color:'#e5e7eb', size:18 });
+    // Effet "nuke" pour un Tetris (4 lignes) — flash rouge + grosse secousse
+    if(count>=4){
+      try{ this._nuke = { start: performance.now(), dur: 900 }; }catch{}
+      try{ this.onNukeShake?.(); }catch{}
+    }
   }
 
   // Valeur par défaut: si un écran enfant ne définit pas onSoftDropTick, ne rien faire
@@ -282,6 +287,10 @@ export class BaseGameScreen {
     if(this.gameOver) return;
     this.gameOver = true;
     try{ audio.playGameOverMusic?.(); }catch{}
+  // Nuke glow timer (flash rouge fort sur le cadre)
+  try{ this._nuke = { start: performance.now(), dur: 900 }; }catch{}
+  // Déclenche une grosse secousse si l'écran enfant l'implémente
+  try{ this.onNukeShake?.(); }catch{}
   }
 
   // Vérifier les objectifs et agir (rediriger Home en solo)
@@ -306,5 +315,17 @@ export class BaseGameScreen {
       // bouton Exit existant fait déjà la remise à zéro propre
     }catch{}
     try{ document.getElementById('btn-exit')?.click(); }catch{}
+  }
+
+  // Helpers visuels communs
+  static alphaAboveBoard(t, base=0.4){
+    const flick = 0.5 + 0.5*Math.sin((t||0)*8.0);
+    return Math.max(0, Math.min(1, base + 0.08*flick));
+  }
+  static jitterForStress(stressK, maxPx=2, threshold=0.9){
+    const s = Math.max(0, Math.min(1, stressK||0));
+    const th = Math.max(0, Math.min(1, threshold));
+    if(s <= th) return 0;
+    return ((s - th)/(1 - th)) * maxPx; // 0..maxPx pour s in (th..1)
   }
 }

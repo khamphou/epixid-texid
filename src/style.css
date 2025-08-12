@@ -505,7 +505,7 @@ canvas.fx{position:absolute;left:10px;top:10px;pointer-events:none;mix-blend-mod
   /* Position explicite: statut à gauche, multijoueur à droite */
   #app .under-panels .panel.status{grid-column:1}
   #app .under-panels #panel-mp{grid-column:2}
-  #app .under-panels > .panel{height:100%; min-height: 130px; display:flex; flex-direction:column; width:100%}
+  #app .under-panels > .panel{height:100%; min-height: 150px; display:flex; flex-direction:column; width:100%}
   /* Serrer les éléments autour du plateau */
   .board-wrap{gap:6px}
   /* Toujours masquer le grand plateau adverse sur mobile */

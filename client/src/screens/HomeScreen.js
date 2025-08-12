@@ -5,6 +5,7 @@ export class HomeScreen{
   constructor(core){
     this.core=core;
     this.idx=0;
+  this._logo = null; this._logoReady = false;
     this.items = [
       { key:'solo', label:'Solo', enabled:true },
       { key:'training', label:'Entraînement (facile)', enabled:true },
@@ -34,9 +35,26 @@ export class HomeScreen{
     if(this.domHome) return; // l'accueil DOM gère l'affichage
     const { canvas } = ctx;
     ctx.fillStyle='#0b0f14'; ctx.fillRect(0,0,canvas.width,canvas.height);
-    // Titre
-    ctx.fillStyle='#93c5fd'; ctx.font='24px system-ui,Segoe UI,Roboto,Arial';
-    ctx.fillText('TEXID', 40, 60);
+    // Titre: afficher le logo au lieu du texte
+    try{
+      if(!this._logo){
+        const url = new URL('../assets/images/logo-texid.png', import.meta.url).href;
+        const img = new Image(); img.src = url; img.onload = ()=>{ this._logoReady = true; }; img.onerror = ()=>{ this._logoReady=false; };
+        this._logo = img;
+      }
+      if(this._logoReady){
+        const maxW = Math.min(320, Math.floor(canvas.width*0.6));
+        const aspect = this._logo.naturalWidth && this._logo.naturalHeight ? (this._logo.naturalWidth/this._logo.naturalHeight) : (4/1);
+        const w = maxW; const h = Math.floor(w / aspect);
+        ctx.drawImage(this._logo, 40, 28, w, h);
+      } else {
+        ctx.fillStyle='#93c5fd'; ctx.font='24px system-ui,Segoe UI,Roboto,Arial';
+        ctx.fillText('TEXID', 40, 60);
+      }
+    }catch{
+      ctx.fillStyle='#93c5fd'; ctx.font='24px system-ui,Segoe UI,Roboto,Arial';
+      ctx.fillText('TEXID', 40, 60);
+    }
     // Menu vertical
     const x=60, y0=120, lh=40; ctx.font='18px system-ui,Segoe UI,Roboto,Arial';
     for(let i=0;i<this.items.length;i++){

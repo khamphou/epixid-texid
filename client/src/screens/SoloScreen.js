@@ -36,6 +36,7 @@ export class SoloScreen extends BaseGameScreen {
     this.nextQueue = [spawn(this.bag), spawn(this.bag), spawn(this.bag), spawn(this.bag), spawn(this.bag), spawn(this.bag)];
     // Audio: intensité musique
   this._musicT = 0; this._musicLevel = 0.2;
+  this._stressK = 0;
   // Shake FX
   this._shake=0; this._shakeX=0; this._shakeY=0;
   // Animation de chute rapide lors d'un hard drop
@@ -44,6 +45,11 @@ export class SoloScreen extends BaseGameScreen {
   this._holdAnim = null;
   // Animation NEXT (entrée de la prochaine pièce + décalage des suivantes)
   this._nextAnim = null;
+  // KO au spawn: délai d'un tick avant validation
+  this._spawnKoPending = false;
+  this._spawnKoWait = false;
+  this._spawnKoAnchorY = null;
+  this._spawnKoDeadline = 0;
   // Animation de premier spawn depuis NEXT
   this._initialAnimDone = false;
   this._initialPiece = null;
@@ -51,19 +57,33 @@ export class SoloScreen extends BaseGameScreen {
   this._enableSoloGarbage = false;
   // Compte à rebours 3s avant départ
   this._countdown = { start: performance.now(), dur: 3000 };
+  // Déclencher le jingle de départ (décompte)
+  try{ await audio.resume?.(); audio.playStartCue?.(3); }catch{}
+  // GO overlay bref après le décompte
+  this._go = null;
   window.addEventListener('keydown', this.onKeyDown);
   window.addEventListener('keyup', this.onKeyUp);
   }
   update(dt){
-    if(this.gameOver) return; // freeze
+    // Même après gameOver, on laisse finir l'anim de chute visuelle; mais on fige le gameplay
+    if(this.gameOver){
+      // Laisser vivre timers visuels
+      if(this._dropAnim){ this._dropAnim.t += dt; if(this._dropAnim.t >= this._dropAnim.dur){ this._dropAnim = null; } }
+      if(this._holdAnim){ this._holdAnim.t += dt; if(this._holdAnim.t >= this._holdAnim.dur){ this._holdAnim = null; } }
+      if(this._nextAnim){ this._nextAnim.t += dt; if(this._nextAnim.t >= this._nextAnim.dur){ this._nextAnim = null; } }
+      super.update?.(dt);
+      return;
+    }
     // Bloquer le gameplay pendant le compte à rebours
     if(this._countdown){
       const left = Math.max(0, this._countdown.dur - (performance.now() - this._countdown.start));
-      if(left <= 0){ this._countdown = null; }
+      if(left <= 0){ this._countdown = null; this._go = { start: performance.now(), dur: 450 }; }
       // Laisser quand même vivre les toasts/overlays du parent
       super.update?.(dt);
       return;
     }
+    // GO flash timer
+    if(this._go){ if(performance.now() - this._go.start >= this._go.dur){ this._go = null; } }
     this.time+=dt; this.objectives?.tick?.(dt);
     // Lock différé (au prochain tick)
     if(this._pendingLock){
@@ -85,6 +105,8 @@ export class SoloScreen extends BaseGameScreen {
       if(this._nextAnim.mode === 'initial' && !this.active){
         this.active = this._initialPiece; this._initialPiece=null; this._initialAnimDone=true;
         this.x=3; this.y=-4; this.rot=0; this.lockTimer=0; this.dropAcc=0;
+  // Armer: attendre au moins 1 descente OU 250ms max avant KO au spawn
+  this._spawnKoPending = true; this._spawnKoWait = true; this._spawnKoAnchorY = Math.floor(this.y); this._spawnKoDeadline = performance.now() + 250;
       }
       this._nextAnim = null;
     }
@@ -93,6 +115,25 @@ export class SoloScreen extends BaseGameScreen {
   super.update?.(dt);
   // Si aucune pièce active (au démarrage), pas de gravité
   if(!this.active){ return; }
+  // KO au spawn: attendre 1 frame ET le 1er pas de gravité (y > anchor) OU un time-out court
+  if(this._spawnKoPending){
+    if(this._spawnKoWait){
+      // attendre un frame complet avant de décider
+      this._spawnKoWait = false;
+    } else {
+      const now = performance.now();
+      const anchor = (this._spawnKoAnchorY==null) ? Math.floor(this.y) : this._spawnKoAnchorY|0;
+      const movedDown = Math.floor(this.y) > anchor;
+      if(!movedDown && now < this._spawnKoDeadline){ /* attendre */ }
+      else {
+        this._spawnKoPending = false;
+        if(collide(this.grid, this.active, this.x, this.y) || cannotEnterVisibleAtSpawn(this.grid, this.active, this.x, Math.floor(this.y)) ){
+          this.triggerGameOver?.();
+          return;
+        }
+      }
+    }
+  }
   // Appliquer la gravityCurve YAML (paliers de vitesse)
   const g = this.rules?.speed?.gravityCurve||[];
   if(g.length){ const t=this.time; let cur=g[0].gravity; for(const p of g){ if(t>=p.t) cur=p.gravity; } this.gravity = (typeof cur==='number'? cur : 1); }
@@ -125,13 +166,16 @@ export class SoloScreen extends BaseGameScreen {
         }
       }
     }
-    // Musique: adapter l'intensité
+    // Musique: adapter l'intensité — déclenche "stress" selon la hauteur de pile (>=80%)
     this._musicT += dt; if(this._musicT>=0.5){ this._musicT=0; try{
-      const incoming = Math.min(10, this.garbage?.incoming||0);
-      const danger = Math.min(1, incoming/6);
+      const hRatio = computeStackRatio(this.grid); // 0..1 (1 = rempli)
+      const stress = Math.max(0, Math.min(1, (hRatio - 0.8) / 0.2)); // 0 sous 80%, 1 à 100%
       const g = Math.min(1, this.gravity/4);
-      const target = Math.max(0.15, Math.min(1, 0.2 + danger*0.6 + g*0.2));
+      const base = 0.22 + g*0.18; // fond léger + gravité
+      const target = Math.max(0.15, Math.min(1, base + stress*0.75));
       if(Math.abs(target - this._musicLevel) >= 0.05){ this._musicLevel = target; audio.setMusicIntensity?.(target); }
+      // Effet visuel lissé
+      const k = 0.5; this._stressK = this._stressK*(1-k) + stress*k;
     }catch{} }
 
   }
@@ -172,11 +216,16 @@ export class SoloScreen extends BaseGameScreen {
       this._shake = Math.max(0, this._shake - 0.4);
     } else { this._shakeX=0; this._shakeY=0; }
 
-    const bx = offx + this._shakeX;
-    const by = offy + this._shakeY;
+  // Jitter léger selon le stress visuel (>~90% de pile)
+  const jAmp = BaseGameScreen.jitterForStress(this._stressK||0, 2.2);
+  const jx = (Math.random()*2-1) * jAmp;
+  const jy = (Math.random()*2-1) * jAmp;
+  const bx = offx + this._shakeX + jx;
+  const by = offy + this._shakeY + jy;
 
-    // Cadre verre du plateau
-    drawGlassFrame(ctx, bx-14, by-14, boardW+28, boardH+28);
+  // Cadre verre du plateau (glow si stress + heartbeat + flash nuke)
+  let nukeGlow = 0; if(this._nuke){ const k = Math.max(0, Math.min(1, (performance.now() - this._nuke.start)/this._nuke.dur)); nukeGlow = 1 - k; }
+  drawGlassFrame(ctx, bx-14, by-14, boardW+28, boardH+28, this._stressK||0, this.time||0, nukeGlow);
     drawInnerFrame(ctx, bx, by, boardW, boardH);
 
     // Grille
@@ -217,7 +266,7 @@ export class SoloScreen extends BaseGameScreen {
           if(!mat[j][i]) continue;
           const gy = y0 + j; const gx = x0 + i; if(gx<0||gx>=this.grid.w) continue;
           const px = bx + gx*cell; const py = by + gy*cell;
-          ctx.save(); if(gy < 0){ ctx.globalAlpha = 0.45; }
+          ctx.save(); if(gy < 0){ ctx.globalAlpha = BaseGameScreen.alphaAboveBoard(this.time||0, 0.6); }
           drawTile(ctx, px, py, cell, color);
           ctx.restore();
         }
@@ -256,7 +305,11 @@ export class SoloScreen extends BaseGameScreen {
   ctx.textAlign='center'; ctx.fillText('kham', bx+boardW/2, by+boardH+22);
     ctx.textAlign='left';
 
-  // Sidebar (toujours visible)
+  // Sidebar (toujours visible) — applique aussi le shake/jitter
+    const sdx = this._shakeX + jx;
+    const sdy = this._shakeY + jy;
+    ctx.save();
+    ctx.translate(sdx, sdy);
     drawPanelGlass(ctx, sideX, sideY, sideW, sideH);
     const playerName = String(localStorage.getItem('texid_name') || 'Player').slice(0,16);
     drawLabelValue(ctx, sideX+12, sideY+22, 'Joueur', playerName, false, sideW);
@@ -265,7 +318,7 @@ export class SoloScreen extends BaseGameScreen {
     drawLabelValue(ctx, sideX+12, sideY+76, 'Lignes', String(this.scoring?.lines||0), false, sideW);
 
     // Sous-panneaux: HOLD (au-dessus, réduit) puis NEXT en dessous
-    const holdTop = sideY + 96;
+  const holdTop = sideY + 96;
     const holdH = 90; // réduit
     const nextTop = holdTop + holdH + 12;
     const nextH = Math.max(120, Math.min(sideH - (nextTop - sideY) - 12, 160));
@@ -278,97 +331,129 @@ export class SoloScreen extends BaseGameScreen {
     // HOLD contenu (plus petit) + mémoriser l’ancre pour anim
     const cellH = 16; const holdX = sideX + Math.floor((sideW - 20 - cellH*4)/2) + 10; const holdY = holdTop + 26;
     this._holdDraw = { x: holdX, y: holdY, cell: cellH };
-    if(this.hold){ drawMat(ctx, this.hold.mat, holdX, holdY, cellH, pieceColor(this.hold.key)); }
+  if(this.hold){ drawMat(ctx, this.hold.mat, holdX, holdY, cellH, pieceColor(this.hold.key)); }
+  ctx.restore();
   // Enregistrer le rect du board tôt pour l’anim initiale potentielle
   this._boardRect = { x:bx, y:by, w:boardW, h:boardH, cell };
-  // NEXT contenu: anneau (cercle) compact (6 items), tailles et opacités dégressives
-    this._nextHit = null; this._nextDraw = [];
+  // NEXT contenu: séparé par un trait — en haut: prochaine pièce (grande), en bas: anneau des suivantes (20% plus petites à chaque pas)
+    // Appliquer le shake/jitter aussi autour de la zone NEXT
+    ctx.save(); ctx.translate(sdx, sdy);
+    this._nextHit = null; this._nextDraw = undefined; this._nextTop = null; this._nextRing = [];
     {
-      const showCount = Math.min(6, this.nextQueue.length);
+    const showCount = Math.min(6, this.nextQueue.length);
       const panelX = sideX+10, panelW = sideW-20;
       const panelY = nextTop, panelH = nextH;
-      const pad = 6; const cx = panelX + Math.floor(panelW/2); const cy = panelY + Math.floor(panelH/2);
-      const Wc = panelW - pad*2, Hc = panelH - pad*2;
-      // Calculer un rayon d’anneau maximal dans le panneau
-      const Rmax = Math.max(12, Math.floor(Math.min(Wc, Hc)/2) - 6);
-      // Choisir une taille de cellule réduite, en s’assurant que l’arc entre items >= largeur pièce + gap
-      const GAP = 6; // écart minimal entre items sur l’anneau
-      let cell0 = 12; // base pour le 1er
-      for(let sz=14; sz>=11; sz--){
-        const need = 4*sz + GAP;
-        const spacing = (2*Math.PI*Rmax) / Math.max(1, showCount);
-        if(spacing >= need){ cell0 = sz; break; }
+  // Séparateur très haut (~14% de la hauteur), proche de la 1ère pièce
+  let topAreaH = Math.max(48, Math.min(panelH - 64, Math.floor(panelH * 0.14)));
+      let botAreaY = panelY + topAreaH + 6;
+      let botAreaH = panelH - topAreaH - 6;
+      const dividerY = panelY + topAreaH + 2.5;
+      // Dessiner le trait séparateur
+      ctx.save(); ctx.strokeStyle='rgba(148,163,184,0.25)'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(panelX+8, dividerY); ctx.lineTo(panelX+panelW-8, dividerY); ctx.stroke(); ctx.restore();
+    // Calcul du cercle du bas — rayon maximal pour espacer les pièces, taille des items quasi fixe
+  const pad = 4; let cx = panelX + Math.floor(panelW/2); let cy = botAreaY + Math.floor(botAreaH/2);
+  let Wc = panelW - pad*2, Hc = botAreaH - pad*2;
+  let Rmax = Math.max(18, Math.floor(Math.min(Wc, Hc)/2) - 1);
+  const ringCount = Math.max(0, showCount - 1);
+  let Reff = Math.max(16, Math.floor(Rmax)); // exploite tout l'espace dispo
+  // Taille du 1er item du cercle basée sur l'espacement angulaire
+  const GAP = 100;
+  let ringCell0;
+  if(ringCount>0){
+    const spacing = (2*Math.PI*Reff)/ringCount;
+    ringCell0 = Math.max(10, Math.min(22, Math.floor((spacing - GAP)/3.6)));
+  } else { ringCell0 = 10; }
+      // Appliquer un ratio plus doux pour garder de grosses pièces
+      const ratio = 0.88;
+    const ringCells = Array.from({length: ringCount}, (_,i)=> Math.max(10, Math.round(ringCell0 * Math.pow(ratio, i))));
+  // Top réduit pour harmonie: ~+60% vs 1er du cercle
+  let topCell = Math.round(ringCell0 * 1.3);
+      const topCellMax = Math.max(10, Math.floor((topAreaH - 18) / 4));
+      if(topCell > topCellMax){
+        // Agrandir la zone haute si nécessaire et recalculer le cercle
+        topAreaH = Math.min(panelH - 64, topCell*4 + 18);
+        botAreaY = panelY + topAreaH + 6;
+        botAreaH = panelH - topAreaH - 6;
+        cx = panelX + Math.floor(panelW/2); cy = botAreaY + Math.floor(botAreaH/2);
+  Wc = panelW - pad*2; Hc = botAreaH - pad*2;
+  Rmax = Math.max(12, Math.floor(Math.min(Wc, Hc)/2) - 1);
+  Reff = Math.max(16, Math.floor(Rmax));
+  if(ringCount>0){ const spacing2 = (2*Math.PI*Reff)/ringCount; ringCell0 = Math.max(12, Math.min(22, Math.floor((spacing2 - GAP)/3.6))); } else { ringCell0 = 10; }
+  for(let i=0;i<ringCells.length;i++) ringCells[i] = Math.max(8, Math.round(ringCell0 * Math.pow(ratio, i)));
+  topCell = Math.round(ringCell0 * 1.3);
       }
-      // Palette de tailles dégressives
-      const sizeFactors = [1.0, 0.93, 0.88, 0.83, 0.78, 0.74];
-      const cellSizes = Array.from({length: showCount}, (_,i)=> Math.max(9, Math.round(cell0 * sizeFactors[i] || 0.74)));
-      // Rayon effectif: basé sur la plus grande taille
-      const maxCell = Math.max(...cellSizes);
-      const needCirc = (4*maxCell + GAP) * Math.max(1, showCount);
-      const Reff = Math.min(Rmax, Math.max(14, Math.floor(needCirc / (2*Math.PI))));
-      const a0 = -Math.PI/2; // commencer en haut
-      const aStep = (2*Math.PI) / Math.max(1, showCount);
+      // Placer le top (prochaine pièce)
+      if(showCount>0){
+        const tx = Math.round(cx - topCell*2);
+        const ty = Math.round(panelY + Math.floor(topAreaH/2) - topCell*2 + 4); // abaisse de 4px
+        this._nextTop = { x: tx, y: ty, cell: topCell };
+        this._nextHit = { x: tx, y: ty, w: topCell*4, h: topCell*4 };
+      }
+      // Placer l’anneau des suivantes
+      const a0 = -Math.PI/2; const aStep = ringCount>0 ? (2*Math.PI)/ringCount : 0;
       const centers = [];
-      for(let i=0;i<showCount;i++){
+      this._nextRing = [];
+      for(let i=0;i<ringCount;i++){
+        const c = ringCells[i];
         const ang = a0 + i*aStep;
         const px = Math.round(cx + Math.cos(ang) * Reff);
         const py = Math.round(cy + Math.sin(ang) * Reff);
-        const c = cellSizes[i];
         const x = Math.round(px - c*2);
         const y = Math.round(py - c*2);
-  this._nextDraw.push({ x, y, cell: c });
-  centers.push({ x: x + c*2, y: y + c*2 });
+        this._nextRing.push({ x, y, cell: c });
+        centers.push({ x: x + c*2, y: y + c*2 });
       }
-      if(this._nextDraw[0]){
-        const nd0 = this._nextDraw[0];
-        this._nextHit = { x: nd0.x, y: nd0.y, w: nd0.cell*4, h: nd0.cell*4 };
-      }
-      // Lien visuel entre items: segments sur l’anneau avec opacité décroissante
-      if(!this._nextAnim && centers.length>1){
+      // Connecteurs visuels: top → premier du cercle (descente), puis segments entre items du cercle
+      if(!this._nextAnim){
         ctx.save();
-        for(let i=0;i<centers.length-1;i++){
-          const a = centers[i], b = centers[i+1];
-          const alpha = Math.max(0.06, 0.18 - i*0.02);
-          ctx.strokeStyle = `rgba(148,163,184,${alpha.toFixed(2)})`;
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.moveTo(a.x, a.y);
-          ctx.lineTo(b.x, b.y);
-          ctx.stroke();
+        // Descente du top vers le premier du cercle
+        if(this._nextTop && centers.length>0){
+          const a = { x: this._nextTop.x + this._nextTop.cell*2, y: this._nextTop.y + this._nextTop.cell*2 };
+          const b = centers[0];
+          ctx.strokeStyle = 'rgba(148,163,184,0.28)';
+          ctx.lineWidth = 2.5;
+          ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+        }
+        // Liaisons entre items du cercle
+        if(centers.length>1){
+          for(let i=0;i<centers.length-1;i++){
+            const a = centers[i], b = centers[i+1];
+            const alpha = Math.max(0.06, 0.18 - i*0.02);
+            ctx.strokeStyle = `rgba(148,163,184,${alpha.toFixed(2)})`;
+            ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+          }
         }
         ctx.restore();
       }
-      // Dessin statique si pas d'animation en cours
+      // Dessin statique si pas d'animation
       if(!this._nextAnim){
-        for(let i=0;i<showCount;i++){
-          const nd = this._nextDraw[i]; const item = this.nextQueue[i]; if(!item) break;
-          const alpha = Math.max(0.4, 1 - i*0.12);
-          ctx.save(); ctx.globalAlpha = alpha;
-          drawMat(ctx, item.mat, nd.x, nd.y, nd.cell, pieceColor(item.key));
-          ctx.restore();
+        // Top
+        if(this._nextTop && this.nextQueue[0]){ const it=this.nextQueue[0]; ctx.save(); ctx.globalAlpha=1; drawMat(ctx, it.mat, this._nextTop.x, this._nextTop.y, this._nextTop.cell, pieceColor(it.key)); ctx.restore(); }
+        // Cercle
+        for(let i=0;i<ringCount;i++){
+          const nd=this._nextRing[i]; const item=this.nextQueue[i+1]; if(!item) break;
+          const alpha = Math.max(0.45, 1 - (i+1)*0.12);
+          ctx.save(); ctx.globalAlpha = alpha; drawMat(ctx, item.mat, nd.x, nd.y, nd.cell, pieceColor(item.key)); ctx.restore();
         }
       }
-      // Déclencher l'animation initiale (NEXT -> spawn) une fois le countdown terminé
-      if(!this._countdown && !this.active && !this._initialAnimDone && !this._nextAnim && this._boardRect && this._nextDraw.length){
-        const br = this._boardRect; const spawnX = br.x + 3*br.cell; const spawnY = br.y + (-4)*br.cell; const spawnC = br.cell;
-        const anchors = this._nextDraw;
-        const show = Math.min(6, Math.min(anchors.length, this.nextQueue.length));
-        const items=[];
-        const first = this.nextQueue.shift() || spawn(this.bag);
-        this._initialPiece = first;
-        // Les suivantes glissent vers la précédente
-        for(let i=0;i<show;i++){
-          const piece = (i===0? first : this.nextQueue[i-1]); if(!piece) break;
+      // Animation initiale NEXT -> spawn + décalage
+      if(!this._countdown && !this.active && !this._initialAnimDone && !this._nextAnim && this._boardRect){
+        const br=this._boardRect; const spawnX=br.x+3*br.cell; const spawnY=br.y+(-4)*br.cell; const spawnC=br.cell;
+        const items=[]; const first = this.nextQueue.shift() || spawn(this.bag); this._initialPiece = first;
+        if(this._nextTop){ items.push({ mat:first.mat.map(r=>r.slice()), color:pieceColor(first.key), x0:this._nextTop.x, y0:this._nextTop.y, c0:this._nextTop.cell, x1:spawnX, y1:spawnY, c1:spawnC }); }
+        // Les suivantes se décalent: ring[0] -> top, ring[i] -> ring[i-1]
+        for(let j=1;j<showCount;j++){
+          const piece = this.nextQueue[j-1]; if(!piece) break;
+          const from = this._nextRing[j-1]; const to = (j===1 ? this._nextTop : this._nextRing[j-2]); if(!from || !to) break;
           const color = pieceColor(piece.key);
-          const from = anchors[i];
-          if(i===0){ items.push({ mat: piece.mat.map(r=>r.slice()), color, x0: from.x, y0: from.y, c0: from.cell, x1: spawnX, y1: spawnY, c1: spawnC }); }
-          else { const to = anchors[i-1]; items.push({ mat: piece.mat.map(r=>r.slice()), color, x0: from.x, y0: from.y, c0: from.cell, x1: to.x, y1: to.y, c1: to.cell }); }
+          items.push({ mat: piece.mat.map(r=>r.slice()), color, x0:from.x, y0:from.y, c0:from.cell, x1:to.x, y1:to.y, c1:to.cell });
         }
-        // compléter la queue
         this.nextQueue.push(spawn(this.bag));
         if(items.length){ this._nextAnim = { t:0, dur:0.18, items, mode:'initial' }; }
       }
-    }
+  }
+  ctx.restore();
 
     // Garbage badge
     const incoming = this.garbage?.incoming||0;
@@ -434,6 +519,23 @@ export class SoloScreen extends BaseGameScreen {
       // Remplissage
       ctx.fillStyle = col;
       ctx.fillText(String(n), 0, 0);
+      ctx.restore();
+    }
+    // Flash "GO" bref après le décompte
+    if(!this._countdown && this._go){
+      const cx2 = bx + boardW/2; const cy2 = by + boardH*(1/3);
+      const p = Math.min(1, (performance.now() - this._go.start)/this._go.dur);
+      const s = 0.9 + 0.3*easeOutBack(p);
+      const col = '#34d399';
+      ctx.save();
+      ctx.translate(cx2, cy2);
+      ctx.scale(s, s);
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.shadowColor = col; ctx.shadowBlur = 22;
+      ctx.lineWidth = 5; ctx.strokeStyle='rgba(0,0,0,0.55)';
+      ctx.font='bold 60px Orbitron, system-ui';
+      ctx.strokeText('GO', 0, 0);
+      ctx.fillStyle = col; ctx.fillText('GO', 0, 0);
       ctx.restore();
     }
   // (overlay fullscreen de countdown supprimé: on garde la version en haut du plateau)
@@ -529,24 +631,22 @@ function lock(self){
   const cancelled = self.garbage.cancel(outgoing);
   const remain = Math.max(0, outgoing - cancelled);
   if(remain>0){ self.garbage.enqueue(remain, delaySec); }
-  // Si l’impact s’est produit au-dessus de la grille, c’est un top-out
-  if(y < 0){ try{ self.triggerGameOver?.(); self.objectives?.onKO?.(); }catch{} return; }
-  // Préparer animation NEXT -> spawn et décalage des suivants
+  // Top-out au verrouillage: si une partie de la pièce est restée au-dessus (y<0) au moment du lock, c'est un KO.
+  if(y < 0){
+    let anyAbove=false; for(let j=0;j<4;j++){ for(let i=0;i<4;i++){ if(self.active.mat[j][i] && (y+j) < 0){ anyAbove=true; break; } } if(anyAbove) break; }
+    if(anyAbove){ try{ self.triggerGameOver?.(); self.objectives?.onKO?.(); }catch{} return; }
+  }
+  // Préparer animation NEXT -> spawn et décalage des suivants (top + anneau)
   try{
-  const anchors = self._nextDraw || [];
     const br = self._boardRect;
-    if(anchors.length && br){
-  const showCount = Math.min(6, Math.min(anchors.length, self.nextQueue.length));
-  const items=[]; const spawnX = br.x + 3*br.cell; const spawnY = br.y + (-4)*br.cell; const spawnC = br.cell;
+    if((self._nextTop || (self._nextRing && self._nextRing.length)) && br){
+      const showCount = Math.min(6, self.nextQueue.length);
+      const items=[]; const spawnX=br.x+3*br.cell; const spawnY=br.y+(-4)*br.cell; const spawnC=br.cell;
       for(let i=0;i<showCount;i++){
-        const piece = self.nextQueue[i]; if(!piece) break;
-        const color = pieceColor(piece.key);
-        const from = anchors[i];
-        if(i===0){
-          items.push({ mat: piece.mat.map(r=>r.slice()), color, x0: from.x, y0: from.y, c0: from.cell, x1: spawnX, y1: spawnY, c1: spawnC });
-        } else {
-          const to = anchors[i-1];
-          items.push({ mat: piece.mat.map(r=>r.slice()), color, x0: from.x, y0: from.y, c0: from.cell, x1: to.x, y1: to.y, c1: to.cell });
+        const piece=self.nextQueue[i]; if(!piece) break; const color=pieceColor(piece.key);
+        if(i===0){ const from=self._nextTop; if(from){ items.push({ mat:piece.mat.map(r=>r.slice()), color, x0:from.x, y0:from.y, c0:from.cell, x1:spawnX, y1:spawnY, c1:spawnC }); } }
+        else {
+          const from=self._nextRing[i-1]; const to = (i===1 ? self._nextTop : self._nextRing[i-2]); if(from && to){ items.push({ mat:piece.mat.map(r=>r.slice()), color, x0:from.x, y0:from.y, c0:from.cell, x1:to.x, y1:to.y, c1:to.cell }); }
         }
       }
       if(items.length){ self._nextAnim = { t:0, dur:0.16, items }; }
@@ -558,8 +658,9 @@ function lock(self){
   self.x=3; self.y=-4; self.lockTimer=0; self.holdUsed=false;
   self.dropAcc = 0; // éviter d'hériter de l'accélération du coup précédent
   // Top-out: si la nouvelle pièce est bloquée dès le spawn -> KO
-  if(collide(self.grid, self.active, self.x, self.y)){
-    try{ self.triggerGameOver?.(); self.objectives?.onKO?.(); }catch{}
+  if(collide(self.grid, self.active, self.x, self.y) || cannotEnterVisibleAtSpawn(self.grid, self.active, self.x, Math.floor(self.y)) ){
+  // Armer la grâce: attendre 1er pas de gravité ou 250ms
+  try{ self._spawnKoPending = true; self._spawnKoWait = true; self._spawnKoAnchorY = Math.floor(self.y); self._spawnKoDeadline = performance.now() + 250; }catch{}
   }
 }
 
@@ -596,6 +697,10 @@ SoloScreen.prototype.swapHold = function(){
   }
   this.x=3; this.y=-4; this.lockTimer=0;
   if(this.rules?.inputs?.holdConsumesLock){ this.holdUsed = true; }
+  // Top-out à l'apparition post-hold
+  if(collide(this.grid, this.active, this.x, this.y) || cannotEnterVisibleAtSpawn(this.grid, this.active, this.x, Math.floor(this.y)) ){
+  try{ this._spawnKoPending = true; this._spawnKoWait = true; this._spawnKoAnchorY = Math.floor(this.y); this._spawnKoDeadline = performance.now() + 250; }catch{}
+  }
 };
 
 // Redémarrage propre (réinitialise l’état et repart avec le même mode)
@@ -605,6 +710,20 @@ SoloScreen.prototype.restart = function(){
     const ctor = this.constructor; // SoloScreen
     const next = new ctor(this.core, { rules: this.rules, objectives: this.objectives });
     this.core.sm.replace(next);
+  }catch{}
+};
+
+// Secousse nucléaire au Game Over (cadre et plateau vibrent fortement puis s'amortissent)
+SoloScreen.prototype.onNukeShake = function(){
+  try{ this._shake = Math.max(this._shake||0, 18); }catch{}
+};
+
+// Game Over: relance automatique en Solo après 5s
+SoloScreen.prototype.triggerGameOver = function(){
+  if(this.gameOver) return;
+  BaseGameScreen.prototype.triggerGameOver.call(this);
+  try{
+    setTimeout(()=>{ if(!this._alive) return; if(typeof this.restart==='function') this.restart(); }, 5000);
   }catch{}
 };
 
@@ -618,11 +737,26 @@ function drawGrid(ctx, x0, y0, w, h, cell){
   ctx.restore();
 }
 
-function drawGlassFrame(ctx, x,y,w,h){
+function drawGlassFrame(ctx, x,y,w,h, stress=0, t=0, nukeGlow=0){
   ctx.save();
+  // Outer glow when stressed
+  const glow = Math.max(0, Math.min(1, stress||0));
+  // Heartbeat: deux impulsions par période (~1.1 Hz) atténuées quand pas stressé
+  const hb = heartbeat(t, 1.1);
+  const hbAmp = 0.35 * (0.25 + 0.75*glow); // amplitude croît avec le stress
+  const hbMul = 1 + hb * hbAmp;
+  // Nuke flash: surcouche rouge intense (0..1)
+  const nukeK = Math.max(0, Math.min(1, nukeGlow||0));
+  const glowBlur = (40 + glow*30 + nukeK*50) * hbMul;
+  const baseAlpha = (0.25 + 0.35*glow) * hbMul;
+  const glowAlpha = Math.min(1, baseAlpha + nukeK*0.8);
+  const glowCol = glow>0 || nukeK>0 ? `rgba(239,68,68,${glowAlpha})` : 'rgba(0,0,0,0.55)';
   ctx.fillStyle='rgba(0,0,0,0.6)';
-  roundRect(ctx, x+2, y+8, w, h, 16); ctx.shadowColor='rgba(0,0,0,0.55)'; ctx.shadowBlur=40; ctx.fill();
-  ctx.strokeStyle='rgba(56,189,248,.14)'; ctx.lineWidth=2; roundRect(ctx, x+2, y+8, w, h, 16); ctx.stroke();
+  ctx.shadowColor = glowCol; ctx.shadowBlur = glowBlur;
+  roundRect(ctx, x+2, y+8, w, h, 16); ctx.fill();
+  // Inner stroke tint shifts with stress
+  const strokeCol = (glow>0 || nukeK>0) ? `rgba(239,68,68,${Math.min(1,(0.12 + 0.08*glow + nukeK*0.3) * (0.9 + 0.4*hb))})` : 'rgba(56,189,248,.14)';
+  ctx.strokeStyle=strokeCol; ctx.lineWidth=2; roundRect(ctx, x+2, y+8, w, h, 16); ctx.stroke();
   ctx.restore();
 }
 
@@ -637,7 +771,7 @@ function drawInnerFrame(ctx, x,y,w,h){
 }
 
 function roundRect(ctx,x,y,w,h,r){
-  const rr = Math.min(r, w/2, h/2);
+  const rr = Math.max(0, Math.min(r, Math.abs(w)/2, Math.abs(h)/2));
   ctx.beginPath();
   ctx.moveTo(x+rr,y);
   ctx.arcTo(x+w,y,x+w,y+h,rr);
@@ -723,6 +857,45 @@ function rgbToHex(r,g,b){ const to = (v)=> v.toString(16).padStart(2,'0'); retur
 
 function computeGhostY(grid, active, x, y){ let yy = Math.floor(y); while(!grid.collide(active.mat, x, yy+1)) yy++; return yy; }
 
+// KO si la pièce spawn entièrement au-dessus (toutes ses cases y<0) et ne peut pas descendre d’un cran (collision à y+1)
+function cannotEnterVisibleAtSpawn(grid, piece, x, y){
+  if(y >= 0) return false;
+  // Essayer la colonne actuelle et quelques décalages proches pour voir si une issue latérale existe
+  const offsets = [0,-1,1,-2,2,-3,3];
+  for(const dx of offsets){
+    let yy = Math.floor(y);
+    while(!grid.collide(piece.mat, x+dx, yy+1)) yy++;
+    let anyVisible=false; for(let j=0;j<4;j++){ for(let i=0;i<4;i++){ if(piece.mat[j][i] && (yy+j)>=0){ anyVisible=true; break; } } if(anyVisible) break; }
+    if(anyVisible) return false; // une voie d'entrée visible existe en se décalant
+  }
+  // Aucune colonne proche ne permet d'entrer dans la zone visible
+  return true;
+}
+
 function easeOutCubic(t){ t = Math.max(0, Math.min(1, t)); return 1 - Math.pow(1 - t, 3); }
 // Légère sur-élan pour l’effet bounce du décompte
 function easeOutBack(t){ t = Math.max(0, Math.min(1, t)); const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); }
+
+// Fonction heartbeat (deux battements par période): pics nets, dépendants du temps
+function heartbeat(t, freq=1.1){
+  // Fraction de phase 0..1
+  const phase = (t*freq) % 1;
+  // Deux impulsions: une forte vers 0, une plus faible vers ~0.35
+  const p1 = Math.max(0, 1 - Math.abs((phase - 0.03)/0.06));
+  const p2 = Math.max(0, 1 - Math.abs((phase - 0.38)/0.08));
+  // Accentuer en puissance pour des pics courts
+  return Math.pow(p1, 3) + 0.65*Math.pow(p2, 3);
+}
+
+// Ratio de remplissage de la pile: 0 (vide) .. 1 (jusqu'en haut)
+function computeStackRatio(grid){
+  const h = grid.h|0, w = grid.w|0;
+  let firstFilled = h; // index de la première ligne contenant quelque chose
+  for(let y=0;y<h;y++){
+    let any=false; for(let x=0;x<w;x++){ if(grid.cells[y][x]){ any=true; break; } }
+    if(any){ firstFilled = y; break; }
+  }
+  if(firstFilled===h) return 0; // vide
+  const filledHeight = h - firstFilled;
+  return Math.max(0, Math.min(1, filledHeight / h));
+}

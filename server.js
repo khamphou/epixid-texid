@@ -10,7 +10,10 @@ import fs from 'fs';
 const app = express();
 const httpServer = createServer(app);
 const wss = new WebSocketServer({ server: httpServer });
-const PORT = process.env.PORT || 8787;
+// Port par défaut (modifiable via env). En cas de conflit, nous tenterons les suivants.
+const BASE_PORT = Number(process.env.PORT || 8787);
+let _listenPort = BASE_PORT;
+let _listenRetries = 8; // essayer jusqu'à 8 ports supplémentaires
 const MAX_SPECTATORS = 10;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 app.use(express.json());
@@ -817,6 +820,21 @@ setInterval(()=>{
   logLobbySnapshot('sweep');
 }, 5000);
 
-httpServer.listen(PORT, ()=>{
-  console.log('MP server listening on', PORT);
+// Gestion d'erreurs d'écoute: si le port est occupé, tenter le prochain
+httpServer.on('error', (err)=>{
+  const code = err && err.code;
+  if(code === 'EADDRINUSE' && _listenRetries > 0){
+    try{ console.warn(`[PORT] ${_listenPort} occupé, tentative sur ${_listenPort+1}`); }catch{}
+    _listenPort += 1;
+    _listenRetries -= 1;
+    setTimeout(()=>{
+      try{ httpServer.listen(_listenPort, ()=>{ try{ console.log('MP server listening on', _listenPort); }catch{} }); }catch{}
+    }, 80);
+    return;
+  }
+  try{ console.error('[HTTP] Listen error:', code || err); }catch{}
+});
+
+httpServer.listen(_listenPort, ()=>{
+  console.log('MP server listening on', _listenPort);
 });

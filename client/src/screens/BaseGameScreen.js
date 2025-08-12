@@ -14,7 +14,9 @@ export class BaseGameScreen {
     this.rules = rules || {};
     this.objectives = objectives || null;
     this.gameOver = false;
-    this._toasts = [];
+  this._toasts = [];
+  // Désactive la sortie auto sur victoire par défaut (évite quitter à l’affichage de “GG!”)
+  this.autoExitOnWin = false;
     this._lastPointer = null;
     this._pActive = false;
     this._pStart = null;
@@ -79,12 +81,14 @@ export class BaseGameScreen {
   // Gestion basique des touches (multi-keys simultanées supportées par le navigateur)
   _onKeyDown(e){
     if(this.gameOver) return;
-    if(['ArrowDown','ArrowUp','ArrowLeft','ArrowRight',' '].includes(e.key)){
+    if(['ArrowDown','ArrowUp','ArrowLeft','ArrowRight',' ','z','Z','x','X','a','A','w','W'].includes(e.key)){
       try{ e.preventDefault(); }catch{}
       try{ e.stopPropagation(); }catch{}
     }
   this._trackKey(e, true);
-  if(e.key==='ArrowUp'){ this.onRotate?.(); return; }
+  // ROTATION (événement unique): Up/W/X = CW, Z/A = CCW
+  if(e.key==='ArrowUp' || e.key==='w' || e.key==='W' || e.key==='x' || e.key==='X'){ this.onRotate?.(); return; }
+  if(e.key==='z' || e.key==='Z' || e.key==='a' || e.key==='A'){ this.onRotateCCW?.(); return; }
   if(e.key===' '){ this._softDropHold = false; this.onHardDrop?.(); return; }
   if(e.key==='ArrowLeft'){ if(!e.repeat) this._setDir(-1); return; }
   if(e.key==='ArrowRight'){ if(!e.repeat) this._setDir(1); return; }
@@ -155,8 +159,8 @@ export class BaseGameScreen {
         const nh = this._nextHit;
         if(nh && endLocal.x>=nh.x && endLocal.x<=nh.x+nh.w && endLocal.y>=nh.y && endLocal.y<=nh.y+nh.h){ this.onHold?.(); return; }
       }catch{}
-      // Tap/clic: gauche = rotation CW, droit = hard drop
-      if((this._pStart.b ?? 0) === 2){ this._softDropHold = false; this.onHardDrop?.(); } else { this.onRotate?.(); }
+  // Tap/clic: gauche = rotation CW, droit = hard drop
+  if((this._pStart.b ?? 0) === 2){ this._softDropHold = false; this.onHardDrop?.(); } else { this.onRotate?.(); }
       return;
     }
     // Flick rapide
@@ -298,8 +302,8 @@ export class BaseGameScreen {
     try{
       if(this.objectives?.check?.()){
         // Fin de partie (victoire)
-        this.toast('GG!', { color:'#facc15', size:26, dur:1.6 });
-        setTimeout(()=> this.navigateHome(), 900);
+  this.toast('GG!', { color:'#facc15', size:26, dur:1.6 });
+  if(this.autoExitOnWin){ setTimeout(()=> this.navigateHome(), 900); }
         return true;
       }
     }catch{}

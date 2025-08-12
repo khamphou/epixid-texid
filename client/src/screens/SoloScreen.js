@@ -17,6 +17,11 @@ export class SoloScreen extends BaseGameScreen {
     try{
       const btn = document.getElementById('btn-new');
       if(btn){ btn.classList.remove('hidden'); btn.onclick = ()=> this.restart(); }
+  // Cacher le bouton IA Training en Solo
+  const easy = document.getElementById('easy-btn');
+  const aiDD = document.getElementById('ai-dd');
+  if(easy){ easy.classList.add('hidden'); easy.setAttribute('aria-expanded','false'); easy.setAttribute('aria-pressed','false'); easy.classList.remove('active','easy-prudent','easy-conservateur','easy-equilibre','easy-agressif'); }
+  if(aiDD){ aiDD.classList.add('hidden'); }
     }catch{}
   this.grid = new Grid(10,20); this.bag=new Bag();
   // Démarrage: pas de pièce active posée, elle arrivera depuis NEXT via une animation
@@ -322,7 +327,9 @@ export class SoloScreen extends BaseGameScreen {
     const holdH = 90; // réduit
     const nextTop = holdTop + holdH + 12;
     const nextH = Math.max(120, Math.min(sideH - (nextTop - sideY) - 12, 160));
-    drawSubPanel(ctx, sideX+10, holdTop, sideW-20, holdH);
+  drawSubPanel(ctx, sideX+10, holdTop, sideW-20, holdH);
+  // Exposer le rect du panneau HOLD pour l'assistance visuelle Training
+  this._holdPanel = { x: sideX+10, y: holdTop, w: sideW-20, h: holdH };
     drawSubPanel(ctx, sideX+10, nextTop, sideW-20, nextH);
     // Labels
     ctx.fillStyle='#94a3b8'; ctx.font='bold 12px system-ui,Segoe UI,Roboto';

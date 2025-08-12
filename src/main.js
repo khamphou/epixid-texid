@@ -677,11 +677,47 @@ function rotate(){
       x += dx; y += dy; active.mat = rot;
       fx.rotate();
       rotFxStart = performance.now();
+      // ROTATION: recalculer le hint pour le Mode Easy
+      try{ computeHint(); }catch{}
       broadcastState();
       return;
     }
   }
   // Si aucun kick ne passe, ne pas tourner
+}
+
+// Rotation antihoraire (CCW) avec mêmes kicks et recalcul du hint
+function rotateCCW(){
+  // 3 rotations CW pour faire une CCW
+  let rot = active.mat;
+  for(let i=0;i<3;i++){ rot = rotateCW(rot); }
+  const getCenter = (mat, ox, oy)=>{
+    let sx=0, sy=0, c=0;
+    for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(mat[j][i]){ sx += (ox+i+0.5); sy += (oy+j+0.5); c++; }
+    if(!c) return { cx: ox+2, cy: oy+2 };
+    return { cx: sx/c, cy: sy/c };
+  };
+  const prevC = getCenter(active.mat, x, y);
+  const newC0 = getCenter(rot, x, y);
+  const baseDx = Math.round(prevC.cx - newC0.cx);
+  const baseDy = Math.round(prevC.cy - newC0.cy);
+  const candidates = [
+    [0, 0],
+    [baseDx, baseDy],
+    [baseDx+1, baseDy], [baseDx-1, baseDy], [baseDx, baseDy-1], [baseDx, baseDy+1],
+    [baseDx+2, baseDy], [baseDx-2, baseDy],
+    [1,0],[ -1,0],[0,-1],[2,0],[-2,0]
+  ];
+  for(const [dx,dy] of candidates){
+    if(!collide(x+dx, y+dy, rot)){
+      x += dx; y += dy; active.mat = rot;
+      fx.rotate();
+      rotFxStart = performance.now();
+      try{ computeHint(); }catch{}
+      broadcastState();
+      return;
+    }
+  }
 }
 
 function move(dx){
@@ -810,7 +846,10 @@ function draw(){
       const landing = getLandingY(x, y, active.mat);
       drawGhost(x, landing, active);
       if(easyMode){
-        drawLandingVerticals(x, landing, active.mat);
+        // Traits verticaux depuis les bords extrêmes de la pièce qui tombe,
+        // jusqu'au premier obstacle (bloc ou sol)
+        drawLandingVerticals(x, y, active.mat);
+        // Marqueurs horizontaux aux bords de l'empreinte à l'atterrissage
         drawLandingEdges(x, landing, active.mat);
       }
     }
@@ -1075,27 +1114,37 @@ function drawLandingLine(row){
 }
 // Lignes verticales de projection (bords gauche/droite) du bas de la pièce jusqu'au bas du plateau
 function drawLandingVerticals(px, py, mat){
+  // Lignes partant de la pièce active (px,py) jusqu'au premier obstacle en dessous
   const b = getPieceBounds(mat);
-  const yPix = ROWS * TILE; // descendre jusqu’au bas du plateau
-  // Trouver, pour chaque bord, la case la plus basse de la colonne correspondante
   const colLeft = b.minX;
   const colRight = b.maxX;
+  // Trouver la case la plus basse de la pièce pour chaque bord
   let bottomJL = b.minY, bottomJR = b.minY;
   for(let j=0;j<4;j++){ if(mat[j][colLeft]) bottomJL = j; }
   for(let j=0;j<4;j++){ if(mat[j][colRight]) bottomJR = j; }
-  // Utiliser py (position d’atterrissage) et non la variable globale y
-  const topPixL = (py + bottomJL + 1) * TILE; // bas de la case la plus basse du bord gauche
-  const topPixR = (py + bottomJR + 1) * TILE; // bas de la case la plus basse du bord droit
-  const leftX = (px + colLeft) * TILE;
-  const rightX = (px + colRight + 1) * TILE;
+  // Coordonnées X alignées sur les bords visibles des tuiles
+  const leftX = (px + colLeft) * TILE;           // bord gauche
+  const rightX = (px + colRight + 1) * TILE;     // bord droit
+  // Y de départ: bas de la case extrême de la pièce active
+  const startYL = (py + bottomJL + 1) * TILE;
+  const startYR = (py + bottomJR + 1) * TILE;
+  // Chercher l'obstacle (sol ou bloc posé) sous chaque colonne bord
+  const findStopY = (col, fromRow) => {
+    let gy = fromRow; // row index juste sous le bas de la pièce
+    while(gy < ROWS && !grid[gy]?.[px + col]){ gy++; }
+    // gy est soit ROWS (sol), soit la première ligne occupée
+    return gy * TILE;
+  };
+  const stopYL = findStopY(colLeft, py + bottomJL + 1);
+  const stopYR = findStopY(colRight, py + bottomJR + 1);
   ctx.save();
   ctx.strokeStyle = 'rgba(125,211,252,0.45)';
   ctx.setLineDash([4,8]);
   ctx.lineWidth = 1.5;
   // gauche
-  ctx.beginPath(); ctx.moveTo(leftX, topPixL); ctx.lineTo(leftX, yPix); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(leftX, startYL); ctx.lineTo(leftX, stopYL); ctx.stroke();
   // droite
-  ctx.beginPath(); ctx.moveTo(rightX, topPixR); ctx.lineTo(rightX, yPix); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(rightX, startYR); ctx.lineTo(rightX, stopYR); ctx.stroke();
   ctx.restore();
 }
 // Calcule les bornes (min/max) d'une matrice 4x4 de pièce
@@ -1417,7 +1466,7 @@ window.addEventListener('keydown', (e)=>{
   // Empêcher le scroll en jeu
   try{
     if(screenGame && screenGame.classList && screenGame.classList.contains('active')){
-      if(['ArrowDown','ArrowUp','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
+      if(['ArrowDown','ArrowUp','ArrowLeft','ArrowRight','Space','KeyZ','KeyA','KeyX','KeyW'].includes(e.code)) e.preventDefault();
     }
   }catch{}
   switch(e.code){
@@ -1429,7 +1478,15 @@ window.addEventListener('keydown', (e)=>{
       move(1);
       hDir = 1; hHoldStart = performance.now(); hLastMove = performance.now();
     } break;
-    case 'ArrowUp': rotate(); break;
+    case 'ArrowUp':
+    case 'KeyW':
+    case 'KeyX':
+      rotate();
+      break;
+    case 'KeyZ':
+    case 'KeyA':
+      rotateCCW();
+      break;
     case 'ArrowDown': {
       const now = performance.now();
       if(!e.repeat && (now - lastArrowDownTs) < 200){ hardDrop(); lastArrowDownTs = 0; break; }
@@ -1466,7 +1523,7 @@ function togglePause(){
   try{
     cvs.addEventListener('contextmenu', (e)=>{
       e.preventDefault();
-      if(!isInputLocked()) rotate();
+  if(!isInputLocked()) hardDrop();
     });
   }catch{}
   let pid = null;
@@ -1526,13 +1583,8 @@ function togglePause(){
     // Tap court -> rotation
     const dist2 = totalDX*totalDX + totalDY*totalDY;
     if(dt <= TAP_MS && dist2 <= (TAP_DIST*TAP_DIST)){
-      // Spécifique souris: clic gauche court = hard drop; tactile/stylet = rotation
-      if(ev.pointerType === 'mouse'){
-        if(downButton === 0){ if(!isInputLocked()) hardDrop(); }
-        // le clic droit est géré via contextmenu
-      } else {
-        rotate();
-      }
+      // Tap court = rotation (quel que soit le pointeur). Le clic droit reste géré via contextmenu.
+      rotate();
     } else {
       // Flick bas rapide -> hard drop
       const vy = totalDY / dt; // px/ms
@@ -3596,6 +3648,7 @@ function computeHint(){
   // Contexte courant pour comparer les deltas
   const holesBefore = countHoles(grid);
   const heightBefore = stackHeight(grid);
+  const hRatio = heightBefore / ROWS;
   const freeRows = ROWS - heightBefore;
   const inDanger = freeRows <= 4; // on touche le plafond
   // second lookahead (2-plies) si dispo
@@ -3606,7 +3659,9 @@ function computeHint(){
   const iIndex = upcomingKeys.findIndex(k=> k==='I');
   const iSoon = iIndex >= 0 && iIndex <= 4; // I attendu dans peu de temps
   // Préférence de puits à droite si I bientôt là
-  const preferRightWell = iSoon;
+  const preferRightWell = iSoon || (aiProfile==='agressif' && hRatio < 0.6);
+  // Sélection lexicographique: minimiser d'abord les nouveaux trous, puis maximiser le score
+  let minNewHolesSeen = Infinity; let bestMinHoleCand = null;
   for(let rot=0; rot<4; rot++){
     const mat = rotateN(TETROMINOS[pieceKey], rot);
     // largeur utile
@@ -3668,6 +3723,31 @@ function computeHint(){
         + la1  * weights.look1
         + la2  * weights.look2
         + mobility * weights.mobility;
+      // Lookahead supplémentaire (3..10) avec décroissance
+      {
+        const K = Math.min(Math.max(2, upcomingKeys.length), 10);
+        if(K>2){
+          const extraBase = Math.max(0.08, Math.min(0.22, weights.look2 * 0.5));
+          let laExtra = 0;
+          for(let i=2;i<K;i++){
+            const decay = Math.pow(0.82, i-2);
+            const k = upcomingKeys[i];
+            if(k){ laExtra += bestPlacementScoreForNext(sim, k) * extraBase * decay; }
+          }
+          score += laExtra;
+        }
+      }
+      // Profil agressif: règles spécifiques
+      if(aiProfile === 'agressif'){
+        if(hRatio < 0.6){
+          if(cleared === 4) score += 120;         // Tetris prioritaire bas
+          if(cleared <= 2) score -= 30;           // éviter 1–2 lignes si mieux existe
+          if(newHoles > 0) score -= newHoles * 4; // limiter les trous
+        } else { // >60% de pile
+          if(cleared >= 3) score += 60;           // privilégier 3+
+          if(newHoles > 0) score -= newHoles * 8; // trous très pénalisants
+        }
+      }
       // Bag-aware bonus/malus: favoriser un puits sur le bord droit si un I arrive bientôt
       if(preferRightWell){
         const rightDepth = columnDepthAt(sim, COLS-1);
@@ -3683,9 +3763,15 @@ function computeHint(){
           score -= rightClosePenalty;
         }
       }
-      const candidate = { x:px, rot, yLanding:py, score, cleared };
+      const candidate = { x:px, rot, yLanding:py, score, cleared, newHoles };
       if(!best || score > best.score){ best = candidate; }
       if(cleared === 0){ if(!bestNonClear || score > bestNonClear.score){ bestNonClear = candidate; } }
+      // Mémoriser le meilleur pour le minimum de nouveaux trous (lexicographique)
+      if(newHoles < minNewHolesSeen){
+        minNewHolesSeen = newHoles; bestMinHoleCand = candidate;
+      } else if(newHoles === minNewHolesSeen && bestMinHoleCand && score > bestMinHoleCand.score){
+        bestMinHoleCand = candidate;
+      }
     }
   }
   // Politique Easy révisée:
@@ -3695,7 +3781,32 @@ function computeHint(){
     const margin = 20; // tolérance
     if(best.score - bestNonClear.score <= margin){ hint = bestNonClear; return; }
   }
-  hint = best;
+  // Choisir systématiquement le meilleur avec le moins de nouveaux trous si dispo
+  if(bestMinHoleCand){ hint = bestMinHoleCand; return; }
+  if(best){ hint = best; return; }
+  // Fallback robuste: aucune proposition n'a été trouvée (rare). Chercher un drop sûr proche de la position actuelle.
+  try{
+    const tryFallback = ()=>{
+      for(let rot=0; rot<4; rot++){
+        const mat = rotateN(TETROMINOS[pieceKey], rot);
+        let minX=4, maxX=0; for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(mat[j][i]){ minX=Math.min(minX,i); maxX=Math.max(maxX,i); }
+        const minPx = -minX; const maxPx = COLS - (maxX+1);
+        const clamp = (v)=> Math.max(minPx, Math.min(maxPx, v));
+        const start = clamp(x);
+        const order = [start];
+        for(let r=1; r<=COLS; r++){ const a=start-r, b=start+r; if(a>=minPx) order.push(a); if(b<=maxPx) order.push(b); }
+        for(const px of order){
+          let py=-2; while(!collide(px, py+1, mat)) py++;
+          if(py>=-1){
+            hint = { x:px, rot, yLanding:py, score: -999, cleared:0, newHoles:0 };
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+    if(!tryFallback()) hint = null;
+  }catch{ hint = null; }
 }
 
 function placeOn(sim, px, py, mat, key){

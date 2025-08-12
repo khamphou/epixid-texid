@@ -1,0 +1,18 @@
+{
+  "name": "texid-server",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "node ./src/index.js",
+    "check:modes": "node -e \"import('./src/modes/loader.js').then(m=>{m.loadAll(); console.log('OK ids:', m.getAllModeIds());}).catch(e=>{console.error(e); process.exit(1);});\""
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "js-yaml": "^4.1.0",
+    "socket.io": "^4.7.5",
+    "tetris-acier-carbone": "file:..",
+    "zod": "^3.23.8"
+  }
+}

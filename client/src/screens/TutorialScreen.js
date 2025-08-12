@@ -1,0 +1,1 @@
+export class TutorialScreen{ constructor(core){ this.core=core; } init(){} update(){} render(ctx){ ctx.fillStyle='#0b0f14'; ctx.fillRect(0,0,ctx.canvas.width,ctx.canvas.height); } handleInput(){} dispose(){} }

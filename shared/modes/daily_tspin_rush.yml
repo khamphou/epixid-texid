@@ -1,0 +1,56 @@
+id: daily_tspin_rush
+version: 1
+title: "Daily: T-Spin Rush"
+description: "Fais 3 T-Spin Doubles et survis 90s. Seed commun."
+visibility: daily
+mode: arcade
+lobby:
+  minPlayers: 1
+  maxPlayers: 1
+  seedPolicy: shared
+rules:
+  attackTable:
+    single: 0
+    double: 1
+    triple: 2
+    tetris: 4
+    tspin:
+      single: 2
+      double: 4
+      triple: 6
+    backToBackBonus: 1
+    comboTable: [0,1,1,2,2,3,3,4,4,5]
+  garbage:
+    delayMs: 0
+    telegraphMs: 0
+    messiness: 0.25
+    cancelPolicy: net
+  speed:
+    lockDelayMs: 520
+    gravityCurve:
+      - { t: 0, gravity: 1.0 }
+      - { t: 60, gravity: 1.6 }
+      - { t: 90, gravity: 2.0 }
+  inputs:
+    dasMs: 110
+    arrMs: 10
+    allow180: true
+    allowHold: true
+    holdConsumesLock: true
+  badges:
+    enabled: false
+    perKOPercent: 0
+    maxStacks: 0
+objectives:
+  winCondition: first_to_objectives
+  targets:
+    tspins: { variant: double, count: 3, withinSeconds: 90 }
+    survive: { seconds: 90 }
+leaderboard:
+  scope: global
+  scoring: score
+daily:
+  enabled: true
+  seed: "2025-08-12"
+  activeFrom: "2025-08-12T00:00:00Z"
+  activeTo:   "2025-08-12T23:59:59Z"

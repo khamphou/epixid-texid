@@ -1,0 +1,1 @@
+export class MultiplayerGameScreen{ constructor(core, { rules, objectives }){ this.core=core; this.rules=rules; this.objectives=objectives; } init(){} update(){} render(ctx){ ctx.fillStyle='#0b0f14'; ctx.fillRect(0,0,ctx.canvas.width,ctx.canvas.height); } handleInput(){} dispose(){} }

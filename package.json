@@ -10,7 +10,10 @@
   "server": "node server.js",
   "dev:all": "concurrently \"npm:server\" \"npm:dev\"",
   "start": "npm run build && node server.js",
-  "gen:music": "node ./tools/gen-mp3.js"
+  "gen:music": "node ./tools/gen-mp3.js",
+  "mod:server": "npm --prefix server run dev",
+  "mod:client": "vite client --open --port 5175",
+  "mod:all": "concurrently \"npm:mod:server\" \"npm:mod:client\""
   },
   "devDependencies": {
     "vite": "^5.3.1",
@@ -20,6 +23,7 @@
     "express": "^4.19.2",
   "ws": "^8.17.0",
   "lamejs": "^1.2.0",
-  "ffmpeg-static": "^5.2.0"
+  "ffmpeg-static": "^5.2.0",
+  "zod": "^3.23.8"
   }
 }

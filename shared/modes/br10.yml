@@ -1,0 +1,52 @@
+id: br10
+version: 1
+title: "Battle Royale 10"
+description: "Dernier survivant, attaques puissantes, badges"
+visibility: public
+mode: br
+lobby:
+  minPlayers: 2
+  maxPlayers: 10
+  seedPolicy: perPlayer
+rules:
+  attackTable:
+    single: 0
+    double: 1
+    triple: 2
+    tetris: 4
+    tspin:
+      single: 2
+      double: 4
+      triple: 6
+    backToBackBonus: 1
+    comboTable: [0,1,1,2,2,3,3,4,4,5]
+  garbage:
+    delayMs: 600
+    telegraphMs: 600
+    messiness: 0.35
+    cancelPolicy: net
+  speed:
+    lockDelayMs: 500
+    gravityCurve:
+      - { t: 0, gravity: 1 }
+      - { t: 40, gravity: 1.5 }
+      - { t: 80, gravity: 2.2 }
+      - { t: 120, gravity: 3.0 }
+  inputs:
+    dasMs: 110
+    arrMs: 10
+    allow180: true
+    allowHold: true
+    holdConsumesLock: true
+  badges:
+    enabled: true
+    perKOPercent: 25
+    maxStacks: 4
+objectives:
+  winCondition: last_standing
+  checkpoints:
+    - { type: kos, count: 1 }
+    - { type: send_garbage, lines: 20 }
+leaderboard:
+  scope: global
+  scoring: placement

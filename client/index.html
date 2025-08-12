@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TEXID</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <!-- Drawer Crédits (latéral droit) -->
+    <div id="drawer-credits" class="drawer" aria-hidden="true" aria-labelledby="credits-title">
+      <div class="drawer-backdrop" data-close="true"></div>
+      <aside class="drawer-panel" role="dialog" aria-modal="true">
+        <header class="drawer-header">
+          <h2 id="credits-title">Crédits</h2>
+          <button id="drawer-credits-close" class="btn" aria-label="Fermer">Fermer</button>
+        </header>
+        <div class="drawer-body">
+          <ul class="credits-list">
+            <li><strong>Société :</strong> Epixid</li>
+            <li><strong>Développeur :</strong> Khamphou</li>
+            <li><strong>Contact :</strong> contact@epixid.com</li>
+            <li><strong>Site :</strong> <a href="https://epixid.com" target="_blank" rel="noopener">epixid.com</a></li>
+          </ul>
+          <div id="credits-desc-slot"></div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Écran d'accueil (hero) -->
+    <section id="screen-start" class="screen active">
+      <div class="hero">
+        <canvas id="hero-bg" class="hero-bg" aria-hidden="true"></canvas>
+        <div class="hero-veil"></div>
+        <canvas id="hero-fx" class="hero-fx" aria-hidden="true"></canvas>
+        <div class="hero-content">
+          <div class="logo-wrap" aria-label="TEXID">
+            <img width="200" src="/assets/images/logo-texid.png" alt="TEXID" class="logo-img" onload="this.style.display='block'; this.nextElementSibling?.classList.add('hidden');" onerror="this.style.display='none'; this.nextElementSibling?.classList.remove('hidden');" />
+            <svg class="logo hidden" viewBox="0 0 680 180" role="img" aria-labelledby="logo-title">
+              <title id="logo-title">TEXID</title>
+              <defs>
+                <linearGradient id="g" x1="0" x2="1">
+                  <stop offset="0%" stop-color="#7dd3fc"/>
+                  <stop offset="100%" stop-color="#38bdf8"/>
+                </linearGradient>
+                <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+                  <feGaussianBlur stdDeviation="4" result="b"/>
+                  <feMerge>
+                    <feMergeNode in="b"/>
+                    <feMergeNode in="SourceGraphic"/>
+                  </feMerge>
+                </filter>
+              </defs>
+              <text x="50%" y="58%" text-anchor="middle" class="logo-fill">TEXID</text>
+              <text x="50%" y="58%" text-anchor="middle" class="logo-stroke">TEXID</text>
+            </svg>
+          </div>
+          <div class="hero-actions">
+            <button id="btn-start-solo" class="btn primary lg">Solo</button>
+            <button id="btn-start-training" class="btn lg">Training <span class="badge-easy">Easy</span></button>
+            <button id="btn-start-arcade" class="btn lg disabled" title="Bientôt disponible">Arcade <span class="badge-soon">Bientôt</span></button>
+            <button id="btn-start-multi" class="btn lg">Multijoueur</button>
+            <button id="btn-hero-top10" class="btn lg ghost">Top 10</button>
+            <button id="btn-credits" class="btn lg ghost">Crédits</button>
+          </div>
+          <p class="start-tip"></p>
+        </div>
+        <div class="hero-footer" title="Infos développeur">
+          <span class="hf-line">Powered by Kham</span>
+          <span class="hf-sep">•</span>
+          <span class="hf-line">Epixid</span>
+          <span class="hf-sep">•</span>
+          <span class="hf-line">08‑08‑2025</span>
+          <span class="hf-sep">•</span>
+          <span class="hf-line">v1.0</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Racine de l’app canvas -->
+    <div id="app-root"></div>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+  
+</html>

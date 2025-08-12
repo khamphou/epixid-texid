@@ -9,7 +9,7 @@ export class HomeScreen{
       { key:'solo', label:'Solo', enabled:true },
       { key:'training', label:'Entraînement (facile)', enabled:true },
       { key:'arcade', label:'Arcade (Bientôt)', enabled:false },
-      { key:'multi', label:'Multijoueur', enabled:false },
+  { key:'multi', label:'Multijoueur', enabled:true },
       { key:'top', label:'Top 10', enabled:false },
       { key:'credits', label:'Crédits', enabled:true },
     ];
@@ -73,7 +73,13 @@ export class HomeScreen{
       const sel=this.items[this.idx];
       if(sel.key==='solo') return this._launchSolo(Config.defaultMode);
       if(sel.key==='training') return this._launchSolo('daily_tspin_rush');
+      if(sel.key==='multi') return this._launchMulti();
       if(sel.key==='credits') return this._toggleCredits(true);
     }
+  }
+  async _launchMulti(){
+    const mod = await import('./MultiplayerLobbyScreen.js');
+    this.core.sm.replace(new mod.MultiplayerLobbyScreen(this.core));
+    try{ document.getElementById('topbar')?.classList.remove('hidden'); }catch{}
   }
 }

@@ -127,11 +127,13 @@ export function initHero(){
     for(const p of state.pieces){ if(p.depth >= 1.0) drawPiece(fctx, p); }
   }
 
+  let _raf = 0; let _running = true;
   function loop(ts){
+    if(!_running) return;
     const dt = state.last ? Math.min(0.05, (ts - state.last)/1000) : 0; state.last = ts;
     step(dt);
     render();
-    requestAnimationFrame(loop);
+    _raf = requestAnimationFrame(loop);
   }
 
   function onMove(e){
@@ -153,9 +155,13 @@ export function initHero(){
   document.addEventListener('mousemove', onMove);
   resize();
   populate(26);
-  requestAnimationFrame(loop);
+  _raf = requestAnimationFrame(loop);
 
   return () => {
+    // Stopper proprement la boucle et retirer les écouteurs
+    _running = false;
+    try{ if(_raf) cancelAnimationFrame(_raf); }catch{}
+    _raf = 0;
     window.removeEventListener('resize', resize);
     document.removeEventListener('mousemove', onMove);
   };

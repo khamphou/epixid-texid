@@ -25,7 +25,7 @@ function bindHomeDOM(){
   qs('#btn-start-training')?.addEventListener('click', ()=> startSolo('daily_tspin_rush'));
   // Placeholder
   qs('#btn-start-arcade')?.addEventListener('click', ()=>{});
-  qs('#btn-start-multi')?.addEventListener('click', ()=>{});
+  qs('#btn-start-multi')?.addEventListener('click', ()=> startMulti());
 
   function startSolo(modeId){
     // Masquer le hero DOM et afficher le canvas, puis demander au HomeScreen de lancer Solo
@@ -54,6 +54,14 @@ function bindHomeDOM(){
     document.getElementById('topbar')?.classList.remove('hidden');
     // Afficher le canvas du ScreenManager
   try{ core.sm.canvas.style.display = 'block'; core.sm.canvas.style.pointerEvents = 'auto'; }catch{}
+  }
+  async function startMulti(){
+    navigateToCanvas();
+    try{ stopHero?.(); stopHero = null; }catch{}
+    // Pousser le Lobby multi
+    const mod = await import('./screens/MultiplayerLobbyScreen.js');
+    core.sm.replace(new mod.MultiplayerLobbyScreen(core));
+    try{ audio.setMusicIntensity?.(0.25); }catch{}
   }
 }
 

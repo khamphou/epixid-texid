@@ -32,10 +32,15 @@ export class Core {
 
   /** @param {number} ts */
   _tick(ts){
-    const dt = this.last ? Math.min(0.05, (ts - this.last)/1000) : 0; this.last = ts;
-    this.sm.update(dt);
-    this.sm.render();
-    requestAnimationFrame(this._tick);
+    try{
+      const dt = this.last ? Math.min(0.05, (ts - this.last)/1000) : 0; this.last = ts;
+      this.sm.update(dt);
+      this.sm.render();
+    }catch(err){
+      try{ console.error('[core.tick] frame error:', err); }catch{}
+    } finally {
+      requestAnimationFrame(this._tick);
+    }
   }
 
   /** Charge un mode depuis YAML (ou serveur en multi) */

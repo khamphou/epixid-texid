@@ -97,3 +97,7 @@ canvas{display:block}
 .modal .modal-content h3{margin:0 0 8px 0; font-family: Orbitron, system-ui; color:#7dd3fc}
 .modal menu{display:flex; gap:8px; justify-content:flex-end; margin-top:12px}
 .modal .primary{background:#0b6b9e;border:1px solid #0c82c1;color:#eaf6ff;border-radius:8px;padding:8px 12px}
+/* Callout aide */
+.help-callout{margin:10px 0; padding:10px 12px; border:1px solid rgba(56,189,248,.25); background:linear-gradient(180deg, rgba(56,189,248,.08), rgba(56,189,248,.04)); color:#dbeafe; border-radius:10px}
+.help-callout strong{color:#7dd3fc}
+.help-callout em{font-style:normal; color:#eaffff}

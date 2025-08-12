@@ -1080,8 +1080,9 @@ function drawLandingVerticals(px, py, mat){
   let bottomJL = b.minY, bottomJR = b.minY;
   for(let j=0;j<4;j++){ if(mat[j][colLeft]) bottomJL = j; }
   for(let j=0;j<4;j++){ if(mat[j][colRight]) bottomJR = j; }
-  const topPixL = (y + bottomJL + 1) * TILE; // bas de la case la plus basse du bord gauche
-  const topPixR = (y + bottomJR + 1) * TILE; // bas de la case la plus basse du bord droit
+  // Utiliser py (position d’atterrissage) et non la variable globale y
+  const topPixL = (py + bottomJL + 1) * TILE; // bas de la case la plus basse du bord gauche
+  const topPixR = (py + bottomJR + 1) * TILE; // bas de la case la plus basse du bord droit
   const leftX = (px + colLeft) * TILE;
   const rightX = (px + colRight + 1) * TILE;
   ctx.save();
@@ -1323,6 +1324,17 @@ function askName(){
 function start(){
   // RNG: en solo, repartir sur Math.random; en multi, onMatchStart fixe rng
   if(!roomId){ rng = Math.random; }
+  // Si on était en mode observateur, s'en désinscrire proprement
+  try{
+    if(!roomId && observingRoom){
+      if(ws && ws.readyState===1){ ws.send(JSON.stringify({ type:'unobserve' })); }
+      observingRoom = null; pendingObserveRoom = null;
+      obsLeftId = obsRightId = null; obsLeftName = obsRightName = '';
+      obsLeftDead = false; obsRightDead = false;
+      // Nettoyer la vue et refléter l'état solo
+      updateOpponentVisibility();
+    }
+  }catch{}
   score = 0; level = 1; speedMs = START_SPEED_MS; lastSpeedup = 0; step.last = 0;
   selfDead = false; opponentDead = false; opponentActive = null;
   gameStartAt = performance.now();
@@ -1544,11 +1556,18 @@ function isInputLocked(){
     const inGame = !!(screenGame && screenGame.classList && screenGame.classList.contains('active'));
     if(!inGame) return true;
     if(paused) return true;
-    if(!running) return true;
+    // En solo: ne pas bloquer si la boucle n'a pas encore tourné mais que l'écran est actif
+    if(!roomId){
+      // autoriser dès que start() a été appelé (running peut être true ou false avant le premier rafraîchi)
+      if(!running) return true;
+    } else {
+      // En multi: bloquer tant que la manche n'a pas démarré ou pas d'adversaire
+      if(!running) return true;
+      if(!mpStarted || !peerConnected) return true;
+    }
     if(serverCountdownActive) return true;
-  if(roomId && (!mpStarted || !peerConnected)) return true;
-  // En mode observateur, on bloque toujours les entrées
-  if(observingRoom && !roomId) return true;
+    // En mode observateur, on bloque toujours les entrées
+    if(observingRoom && !roomId) return true;
     return false;
   }catch{ return false; }
 }
@@ -2672,7 +2691,8 @@ function renderPlayersJoin(players){
 
 async function joinRoom(id){
   const ok = await ensureWSReady();
-  if(ok && ws && ws.readyState===1){ ws.send(JSON.stringify({type:'join', room:id})); roomId = id; }
+  // Ne pas définir roomId avant la confirmation 'joined' du serveur
+  if(ok && ws && ws.readyState===1){ ws.send(JSON.stringify({type:'join', room:id})); }
 }
 
 function drawOpponent(){
@@ -3127,9 +3147,10 @@ function updateOpponentVisibility(){
   try{
     const app = document.getElementById('app');
     if(app){
-      app.classList.toggle('solo-mode', !roomId && !observingRoom);
-      // En mode observateur, activer une classe dédiée pour le layout mobile
-      app.classList.toggle('observer-mode', !!(observingRoom && !roomId));
+  const isSolo = !roomId && !observingRoom;
+  app.classList.toggle('solo-mode', isSolo);
+  // En mode observateur, activer une classe dédiée pour le layout mobile
+  app.classList.toggle('observer-mode', !!(observingRoom && !roomId));
     }
   }catch{}
   if(panelMP){ panelMP.classList.toggle('hidden', !roomId && !observingRoom); }
@@ -3227,6 +3248,16 @@ function updateStartButtonLabel(){
 function showStart(){
   setScreen('start');
   try{ fx.playHomeIntroMusic(); }catch{}
+  // Si on observait une salle, se désinscrire proprement et revenir à un état solo neutre
+  try{
+    if(observingRoom){
+      if(ws && ws.readyState===1){ ws.send(JSON.stringify({ type:'unobserve' })); }
+      observingRoom = null; pendingObserveRoom = null;
+      obsLeftId = obsRightId = null; obsLeftName = obsRightName = '';
+      obsLeftDead = false; obsRightDead = false;
+      updateOpponentVisibility();
+    }
+  }catch{}
 }
 let joinPoll = null;
 function showJoin(){

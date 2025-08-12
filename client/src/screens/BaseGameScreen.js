@@ -19,7 +19,10 @@ export class BaseGameScreen {
     this._pActive = false;
     this._pStart = null;
     this._pId = null;
+  this._dragAccum = 0; // accumulation de déplacement horizontal lors du drag
     this._softDropHold = false;
+  // Tap: rotation immédiate; on ne différencie plus simple/double
+  this._tapPending = false; this._tapTimer = null; this._singleDelayMs = 0;
   // DAS/ARR intégrés (clavier) – valeurs par défaut adoucies
   this._dasMs = (this.rules?.inputs?.dasMs ?? 140);
   this._arrMs = (this.rules?.inputs?.arrMs ?? 20);
@@ -59,6 +62,7 @@ export class BaseGameScreen {
 
   dispose(){
     this._alive = false;
+  try{ if(this._tapTimer){ clearTimeout(this._tapTimer); this._tapTimer=null; this._tapPending=false; } }catch{}
     window.removeEventListener('keydown', this._kbHandlers.keydown);
     window.removeEventListener('keyup', this._kbHandlers.keyup);
     const cvs = this.core.sm.canvas;
@@ -104,48 +108,61 @@ export class BaseGameScreen {
     if(this.gameOver) return;
     const cvs = this.core.sm.canvas;
     try{ cvs.setPointerCapture(ev.pointerId); this._pId = ev.pointerId; }catch{}
+  // Annuler un tap simple en attente si un nouvel appui commence
+  if(this._tapTimer){ try{ clearTimeout(this._tapTimer); }catch{} this._tapTimer=null; this._tapPending=false; }
     this._pActive = true;
     this._pStart = { x: ev.clientX, y: ev.clientY, t: performance.now(), b: ev.button };
     this._lastPointer = { x: ev.clientX, y: ev.clientY, t: performance.now() };
+    this._dragAccum = 0;
   }
   _onPointerMove(ev){
     if(!this._pActive || (this._pId!==null && ev.pointerId!==this._pId)) return;
-    this._lastPointer = { x: ev.clientX, y: ev.clientY, t: performance.now() };
+    const now = performance.now();
+    this._lastPointer = { x: ev.clientX, y: ev.clientY, t: now };
+    // Si un bouton est enfoncé et qu'on déplace la souris, bouger la pièce vers le côté du drag
+    // On utilise un petit seuil pour éviter les micro-mouvements
+  const THRESH = 18;
+  const dx = ev.clientX - this._pStart.x;
+  const dy = ev.clientY - this._pStart.y;
+  const stepUnits = (ev.buttons && ev.buttons!==0) ? Math.trunc((dx - this._dragAccum) / THRESH) : 0;
+    if(stepUnits !== 0){
+      const dir = Math.sign(stepUnits);
+      for(let i=0;i<Math.abs(stepUnits);i++){ this.onMove?.(dir); }
+      this._dragAccum += stepUnits * THRESH;
+    }
+  // Soft drop via glisser vers le bas (tant que le doigt/bouton est enfoncé)
+  if(ev.buttons && ev.buttons!==0){ this._softDropHold = dy > 16; }
   }
   _onPointerUp(ev){
     if(!this._pActive || (this._pId!==null && ev.pointerId!==this._pId)) return;
     this._pActive = false; this._pId = null;
     const end = { x: ev.clientX, y: ev.clientY, t: performance.now(), b: ev.button };
+  const cvs = this.core?.sm?.canvas;
+  const rect = cvs ? cvs.getBoundingClientRect() : { left:0, top:0 };
+  const endLocal = { x: end.x - rect.left, y: end.y - rect.top };
     const dx = end.x - this._pStart.x; const dy = end.y - this._pStart.y; const dt = end.t - this._pStart.t;
     const dist2 = dx*dx + dy*dy;
     const TAP_MS = 250; const TAP_DIST = 14; // tolérance légère
     // Tap court
     if(dt <= TAP_MS && dist2 <= (TAP_DIST*TAP_DIST)){
-      // Tactile/stylet: tap = rotation (héritage)
-      if(ev.pointerType !== 'mouse'){ this.onRotate?.(); return; }
-      // Souris: clic droit => rotation
-      if((this._pStart.b ?? 0) === 2){ this.onRotate?.(); return; }
-      // Souris: clic gauche - double-clic => hard drop; sinon déplacement vers le côté cliqué
-      const now = end.t;
-      const dbl = (now - (this._lastLeftClickAt||0)) <= 260;
-      this._lastLeftClickAt = now;
-      if(dbl){ this.onHardDrop?.(); return; }
+      // Priorité: clic dans NEXT => HOLD
       try{
-        const br = this.getBoardRect?.();
-        if(br && br.w>0){
-          const cx = br.x + br.w/2;
-          const dir = (end.x < cx) ? -1 : 1;
-          this.onMove?.(dir);
-        }
+        const nh = this._nextHit;
+        if(nh && endLocal.x>=nh.x && endLocal.x<=nh.x+nh.w && endLocal.y>=nh.y && endLocal.y<=nh.y+nh.h){ this.onHold?.(); return; }
       }catch{}
+      // Tap/clic: rotation (gauche = CW, droit = CCW)
+      if((this._pStart.b ?? 0) === 2){ this.onRotateCCW?.(); } else { this.onRotate?.(); }
       return;
     }
     // Flick rapide
     if(dt < 200){
-      if(dy > 40){ this.onHardDrop?.(); return; }
+      // Swipe up => hard drop (meilleure pratique mobile)
+      if(dy < -40){ this.onHardDrop?.(); return; }
       if(dx > 30){ this.onMove?.(1); return; }
       if(dx < -30){ this.onMove?.(-1); return; }
     }
+    // Relâchement: arrêter soft drop
+    this._softDropHold = false;
   }
 
   update(dt){

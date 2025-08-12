@@ -19,26 +19,41 @@ export class SoloScreen extends BaseGameScreen {
       if(btn){ btn.classList.remove('hidden'); btn.onclick = ()=> this.restart(); }
     }catch{}
     this.grid = new Grid(10,20); this.bag=new Bag(); this.active=spawn(this.bag);
-  this.x=3; this.y=0; this.rot=0; this.score=0; this.combo=-1; this.b2b=false; this.time=0;
+  this.x=3; this.y=-2; this.rot=0; this.score=0; this.combo=-1; this.b2b=false; this.time=0;
   // Vitesse et délais depuis le YAML
   const lockMs = this.rules?.speed?.lockDelayMs; this.lockDelay = (typeof lockMs==='number'? lockMs : 500)/1000;
   // Gravité initiale (sera recalculée chaque frame via la gravityCurve)
   const g0 = Array.isArray(this.rules?.speed?.gravityCurve) && this.rules.speed.gravityCurve.length ? this.rules.speed.gravityCurve[0].gravity : 1;
   this.gravity = (typeof g0==='number' ? g0 : 1);
-  this.dropAcc=0; this.lockTimer=0; this.holdDown=false;
+  this.dropAcc=0; this.lockTimer=0; this.holdDown=false; this._pendingLock=false;
     this.scoring = new Scoring();
     this.garbage = new Garbage();
     // Hold / Next
-    this.hold = null; this.holdUsed = false;
+  this.hold = null; this.holdUsed = false;
     this.nextQueue = [spawn(this.bag), spawn(this.bag), spawn(this.bag), spawn(this.bag), spawn(this.bag)];
     // Audio: intensité musique
-    this._musicT = 0; this._musicLevel = 0.2;
+  this._musicT = 0; this._musicLevel = 0.2;
+  // Shake FX
+  this._shake=0; this._shakeX=0; this._shakeY=0;
+  // Animation de chute rapide lors d'un hard drop
+  this._dropAnim = null;
   window.addEventListener('keydown', this.onKeyDown);
   window.addEventListener('keyup', this.onKeyUp);
   }
   update(dt){
     if(this.gameOver) return; // freeze
     this.time+=dt; this.objectives?.tick?.(dt);
+    // Lock différé (au prochain tick)
+    if(this._pendingLock){
+      this._pendingLock=false;
+      lock(this);
+      if(this.checkObjectivesAndMaybeEnd()) return;
+    }
+    // Animation hard drop en cours ?
+    if(this._dropAnim){
+      this._dropAnim.t += dt;
+      if(this._dropAnim.t >= this._dropAnim.dur){ this._dropAnim = null; }
+    }
   // Entrées centralisées (DAS/ARR + soft drop) traitées avant la gravité
   super.update?.(dt);
   // Appliquer la gravityCurve YAML (paliers de vitesse)
@@ -50,11 +65,8 @@ export class SoloScreen extends BaseGameScreen {
     while(this.dropAcc>=1){
       this.dropAcc-=1; this.y+=1;
       if(collide(this.grid,this.active,this.x,this.y)) {
-        this.y--; this.lockTimer+=dt;
-        if(this.lockTimer>=this.lockDelay){
-          lock(this);
-          if(this.checkObjectivesAndMaybeEnd()) return;
-        }
+        this.y--;
+        this._pendingLock = true; // coller au prochain tick
         break;
       } else { this.lockTimer=0; }
     }
@@ -86,8 +98,8 @@ export class SoloScreen extends BaseGameScreen {
   }
   render(ctx){
     // Fond
-    ctx.fillStyle = '#0b0f14';
-    ctx.fillRect(0,0,ctx.canvas.width,ctx.canvas.height);
+  ctx.fillStyle = '#0b0f14';
+  ctx.fillRect(0,0,ctx.canvas.width,ctx.canvas.height);
 
     // Layout (board + sidebar). Sidebar toujours visible: si manque de place, elle passe dessous.
     const rect = ctx.canvas.getBoundingClientRect();
@@ -123,35 +135,89 @@ export class SoloScreen extends BaseGameScreen {
       sideY = offy + boardH + gap; sideW = Math.min(sideIdealW, W - margin*2); sideH = 180;
     }
 
+    // Shake léger: offsetter l’affichage du board
+    if(this._shake>0){
+      this._shakeX = (Math.random()*2-1) * this._shake;
+      this._shakeY = (Math.random()*2-1) * this._shake;
+      this._shake = Math.max(0, this._shake - 0.4);
+    } else { this._shakeX=0; this._shakeY=0; }
+
+    const bx = offx + this._shakeX;
+    const by = offy + this._shakeY;
+
     // Cadre verre du plateau
-    drawGlassFrame(ctx, offx-14, offy-14, boardW+28, boardH+28);
-    drawInnerFrame(ctx, offx, offy, boardW, boardH);
+    drawGlassFrame(ctx, bx-14, by-14, boardW+28, boardH+28);
+    drawInnerFrame(ctx, bx, by, boardW, boardH);
 
     // Grille
-    drawGrid(ctx, offx, offy, this.grid.w, this.grid.h, cell);
-
-    // Ghost piece
+    drawGrid(ctx, bx, by, this.grid.w, this.grid.h, cell);
+    // Ghost piece (semi-transparent et plus léger si au-dessus)
     const ghostY = computeGhostY(this.grid, this.active, this.x, this.y);
-    drawMat(ctx, this.active.mat, offx+this.x*cell, offy+ghostY*cell, cell, 'ghost');
-
-    // Tuiles posées
+    {
+      const mat=this.active.mat; const y0=ghostY; const x0=this.x;
+      for(let j=0;j<4;j++){
+        for(let i=0;i<4;i++){
+          if(!mat[j][i]) continue; const gx=x0+i, gy=y0+j; if(gx<0||gx>=this.grid.w) continue;
+          const px=bx+gx*cell, py=by+gy*cell; ctx.save(); ctx.globalAlpha = (gy<0? 0.35 : 0.75);
+          drawGhostCell(ctx, px, py, cell);
+          ctx.restore();
+        }
+      }
+    }
+    // Tuiles posées (masquer temporairement celles de la pièce verrouillée si une anim de drop est en cours)
+    let hideSet = null;
+    if(this._dropAnim){
+      hideSet = new Set(this._dropAnim.finalCells?.map(c => `${c.x},${c.y}`));
+    }
     for(let y=0;y<this.grid.h;y++){
       for(let x=0;x<this.grid.w;x++){
+        if(hideSet && hideSet.has(`${x},${y}`)) continue;
         const v = this.grid.cells[y][x];
         if(v){
           const col = typeof v==='string' ? v : pieceColor(v);
-          drawTile(ctx, offx+x*cell, offy+y*cell, cell, col);
+          drawTile(ctx, bx+x*cell, by+y*cell, cell, col);
+        }
+      }
+    }
+    // Pièce active (parties au-dessus du plateau en transparence)
+    {
+      const mat = this.active.mat; const y0 = Math.floor(this.y); const x0 = this.x; const color = pieceColor(this.active.key);
+      for(let j=0;j<4;j++){
+        for(let i=0;i<4;i++){
+          if(!mat[j][i]) continue;
+          const gy = y0 + j; const gx = x0 + i; if(gx<0||gx>=this.grid.w) continue;
+          const px = bx + gx*cell; const py = by + gy*cell;
+          ctx.save(); if(gy < 0){ ctx.globalAlpha = 0.45; }
+          drawTile(ctx, px, py, cell, color);
+          ctx.restore();
         }
       }
     }
 
-    // Pièce active
-    const color = pieceColor(this.active.key);
-    drawMat(ctx, this.active.mat, offx+this.x*cell, offy+Math.floor(this.y)*cell, cell, color);
+    // Animation de chute rapide (overlay) – pièce précédente interpolée entre yStart -> yEnd
+    if(this._dropAnim){
+      const a = this._dropAnim;
+      const k = Math.min(1, a.t / a.dur);
+      const kk = easeOutCubic(k);
+      const yInterp = a.yStart + (a.yEnd - a.yStart) * kk;
+      for(let j=0;j<4;j++){
+        for(let i=0;i<4;i++){
+          if(!a.mat[j][i]) continue;
+          const gx = a.x + i; const gyf = yInterp + j; const gy = Math.floor(gyf);
+          if(gx<0||gx>=this.grid.w) continue;
+          const px = bx + gx*cell; const py = by + gyf*cell;
+          ctx.save();
+          // Légère transparence et flou de mouvement minimal
+          ctx.globalAlpha = 0.9;
+          drawTile(ctx, px, py, cell, a.color);
+          ctx.restore();
+        }
+      }
+    }
 
     // Légende sous plateau
-    ctx.fillStyle = '#b6c2cf'; ctx.font = '12px system-ui,Segoe UI,Roboto,Arial';
-    ctx.textAlign='center'; ctx.fillText('kham', offx+boardW/2, offy+boardH+22);
+  ctx.fillStyle = '#b6c2cf'; ctx.font = '12px system-ui,Segoe UI,Roboto,Arial';
+  ctx.textAlign='center'; ctx.fillText('kham', bx+boardW/2, by+boardH+22);
     ctx.textAlign='left';
 
     // Sidebar (toujours visible)
@@ -161,22 +227,31 @@ export class SoloScreen extends BaseGameScreen {
   drawLabelValue(ctx, sideX+14, sideY+66, 'Score', String(this.scoring?.score||0), true, sideW);
   drawLabelValue(ctx, sideX+14, sideY+88, 'Lignes', String(this.scoring?.lines||0), false, sideW);
 
-    // Sous-panneaux Hold/Next
+  // Sous-panneaux Hold/Next
     const subTop = sideY + 110;
     const subW = Math.floor((sideW - 36)/2);
     drawSubPanel(ctx, sideX+12, subTop, subW, 120);
     drawSubPanel(ctx, sideX+24+subW, subTop, subW, 120);
+  // Labels HOLD / NEXT (à l'intérieur, en haut-gauche)
+  ctx.fillStyle='#94a3b8'; ctx.font='bold 12px system-ui,Segoe UI,Roboto';
+  ctx.textAlign='left'; ctx.fillText('HOLD', sideX+12+10, subTop+16);
+  ctx.textAlign='left'; ctx.fillText('NEXT', sideX+24+subW+10, subTop+16);
     if(this.hold){ drawMat(ctx, this.hold.mat, sideX+12+24, subTop+36, 18, pieceColor(this.hold.key)); }
+    // Dessin des deux prochaines pièces et hitbox de la première pour HOLD
+    this._nextHit = null;
     for(let i=0;i<2 && i<this.nextQueue.length;i++){
-      drawMat(ctx, this.nextQueue[i].mat, sideX+24+subW + 24, subTop+22 + i*54, 18, pieceColor(this.nextQueue[i].key));
+      const nx = sideX+24+subW + 24;
+      const ny = subTop+22 + i*54;
+      drawMat(ctx, this.nextQueue[i].mat, nx, ny, 18, pieceColor(this.nextQueue[i].key));
+      if(i===0){ this._nextHit = { x:nx, y:ny, w:18*4, h:18*4 }; }
     }
 
     // Garbage badge
     const incoming = this.garbage?.incoming||0;
-    if(incoming>0){ drawDangerBadge(ctx, offx+boardW-10, offy-10, incoming); }
+  if(incoming>0){ drawDangerBadge(ctx, bx+boardW-10, by-10, incoming); }
 
     // Overlays du parent (toasts, game over)
-    this._boardRect = { x:offx, y:offy, w:boardW, h:boardH, cell };
+  this._boardRect = { x:bx, y:by, w:boardW, h:boardH, cell };
     super.render?.(ctx);
   }
   handleInput(){}
@@ -191,9 +266,31 @@ export class SoloScreen extends BaseGameScreen {
 
   // BaseGameScreen hooks
   onRotate(){ const r=rotateCW(this.active.mat); if(!collide(this.grid,{mat:r},this.x,this.y)) this.active.mat=r; }
-  onHardDrop(){ while(!collide(this.grid,this.active,this.x,this.y+1)) this.y++; lock(this); this.checkObjectivesAndMaybeEnd(); }
+  onRotateCCW(){ const r=rotateCW(rotateCW(rotateCW(this.active.mat))); if(!collide(this.grid,{mat:r},this.x,this.y)) this.active.mat=r; }
+  onHardDrop(){
+    // Préparer l'animation de chute (copie de la pièce courante)
+    const startY = Math.floor(this.y);
+    const endY = computeGhostY(this.grid, this.active, this.x, this.y);
+    const pieceCopy = { mat: this.active.mat.map(r=>r.slice()) };
+    const color = pieceColor(this.active.key);
+    const finalCells = [];
+    for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(pieceCopy.mat[j][i]) finalCells.push({ x:this.x+i, y:endY+j });
+    const dist = Math.max(0, (endY - startY));
+    const dur = Math.max(0.09, Math.min(0.22, 0.06 + dist*0.015)); // 60ms + 15ms/ligne, borné
+    this._dropAnim = { mat: pieceCopy.mat, color, x:this.x, yStart:startY, yEnd:endY, t:0, dur, finalCells };
+    // Poser instantanément pour le gameplay et afficher la prochaine pièce tout de suite
+    this.y = endY; // pas strictement nécessaire mais explicite
+    lock(this);
+    this.checkObjectivesAndMaybeEnd();
+  }
   onMove(step){ const nx = this.x + Math.sign(step); if(!collide(this.grid,this.active,nx,this.y)){ this.x = nx; this.lockTimer=0; } }
   onSoftDropTick(dt){ this.dropAcc += dt*this.gravity*18; }
+  onHold(){
+    if(this.rules?.inputs?.allowHold){
+      const consumes = !!this.rules?.inputs?.holdConsumesLock;
+      if(!consumes || !this.holdUsed){ this.swapHold(); }
+    }
+  }
 
   onKeyDown = (e)=>{
     if(e.repeat || this.gameOver) return;
@@ -223,24 +320,30 @@ function lock(self){
   const y=Math.floor(self.y);
   self.grid.merge(self.active.mat, self.x, y, pieceColor(self.active.key));
   try{ audio.playImpactSfx?.(); }catch{}
+  // Secousse à l'impact
+  try{ self._shake = Math.min(3, (self._shake||0) + 1.2); }catch{}
   const cleared=self.grid.clear();
   let tsp=null; if(self.active.key==='T' && cleared>0){ tsp = cleared===1? 'single' : cleared===2? 'double' : 'triple'; }
   self.scoring.onClear({ lines: cleared, tspin: tsp });
   try{ self.objectives?.onClear?.({ lines: cleared, tspin: tsp, combo: self.scoring?.combo||0 }); }catch{}
   if(cleared>0){ try{ self.noteLineClear?.(cleared); }catch{} }
+  // Secousse plus forte selon nb de lignes
+  if(cleared>0){ try{ self._shake = Math.min(6, (self._shake||0) + 0.8*cleared + (cleared>=4? 1.0:0)); }catch{} }
   self.combo = self.scoring.combo; self.b2b = self.scoring.b2b;
   const delaySec = (self.rules?.garbage?.delayMs ?? 600)/1000;
   const outgoing=self.rules.attackFor({ lines: cleared, tspinVariant:tsp, b2b:self.b2b, combo:Math.max(0,self.combo) });
   const cancelled = self.garbage.cancel(outgoing);
   const remain = Math.max(0, outgoing - cancelled);
   if(remain>0){ self.garbage.enqueue(remain, delaySec); }
+  // Si l’impact s’est produit au-dessus de la grille, c’est un top-out
+  if(y < 0){ try{ self.triggerGameOver?.(); self.objectives?.onKO?.(); }catch{} return; }
   // Nouvelle pièce
   self.active = self.nextQueue.shift() || spawn(self.bag);
   self.nextQueue.push(spawn(self.bag));
-  self.x=3; self.y=0; self.lockTimer=0; self.holdUsed=false;
-  // Top-out: si la nouvelle pièce spawn en collision, c'est fini
+  self.x=3; self.y=-2; self.lockTimer=0; self.holdUsed=false;
+  // Top-out: si la nouvelle pièce est bloquée dès le spawn -> KO
   if(collide(self.grid, self.active, self.x, self.y)){
-  try{ self.triggerGameOver?.(); self.objectives?.onKO?.(); }catch{}
+    try{ self.triggerGameOver?.(); self.objectives?.onKO?.(); }catch{}
   }
 }
 
@@ -258,7 +361,7 @@ SoloScreen.prototype.swapHold = function(){
     this.active = this.nextQueue.shift() || spawn(this.bag);
     this.nextQueue.push(spawn(this.bag));
   }
-  this.x=3; this.y=0; this.lockTimer=0;
+  this.x=3; this.y=-2; this.lockTimer=0;
   if(this.rules?.inputs?.holdConsumesLock){ this.holdUsed = true; }
 };
 
@@ -386,3 +489,5 @@ function hexToRgb(hex){ const h = hex.replace('#',''); const n = parseInt(h.leng
 function rgbToHex(r,g,b){ const to = (v)=> v.toString(16).padStart(2,'0'); return `#${to(r)}${to(g)}${to(b)}`; }
 
 function computeGhostY(grid, active, x, y){ let yy = Math.floor(y); while(!grid.collide(active.mat, x, yy+1)) yy++; return yy; }
+
+function easeOutCubic(t){ t = Math.max(0, Math.min(1, t)); return 1 - Math.pow(1 - t, 3); }

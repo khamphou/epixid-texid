@@ -26,6 +26,8 @@ export class MultiplayerGameScreen extends BaseGameScreen{
 		this.selfId = meta?.selfId || null;
 		this.ready = false; this.peerReady = false; this.connected = false; this.started = !!meta?.started;
 		this._boardRect = { x:0,y:0,w:0,h:0,cell:24 };
+	// Animation de chute lors du hard drop
+	this._dropAnim = null;
 	}
 	async init(){
 		await super.init?.();
@@ -59,6 +61,8 @@ export class MultiplayerGameScreen extends BaseGameScreen{
 		if(!this.started){ super.update?.(dt); return; }
 		// Traiter les entrées centralisées (DAS/ARR + soft drop) avant la gravité
 		super.update?.(dt);
+		// Avancer l'animation de hard drop si présente
+		if(this._dropAnim){ this._dropAnim.t += dt; if(this._dropAnim.t >= this._dropAnim.dur){ this._dropAnim = null; } }
 		this.time+=dt;
 		// Gravité simple (accélération soft drop via onSoftDropTick)
 		const gravityFactor = 1.4;
@@ -76,12 +80,64 @@ export class MultiplayerGameScreen extends BaseGameScreen{
 		const bw = this.grid.w*cell, bh = this.grid.h*cell;
 		const gap = 40; const totalW = bw*2 + gap; const x0 = Math.floor((canvas.width - totalW)/2); const y0 = Math.floor((canvas.height - bh)/2);
 		drawInner(ctx, x0, y0, bw, bh); drawInner(ctx, x0+bw+gap, y0, bw, bh);
-		// Moi
-		for(let y=0;y<this.grid.h;y++) for(let x=0;x<this.grid.w;x++){ const v=this.grid.cells[y][x]; if(v){ drawTile(ctx, x0+x*cell, y0+y*cell, cell, pieceColor(v)); } }
-		drawMat(ctx, this.active.mat, x0+this.x*cell, y0+Math.floor(this.y)*cell, cell, pieceColor(this.active.key));
+		// Moi (masquer temporairement les cellules de la pièce verrouillée si anim en cours)
+		let hideSet = null; if(this._dropAnim){ hideSet = new Set(this._dropAnim.finalCells?.map(c=>`${c.x},${c.y}`)); }
+		for(let y=0;y<this.grid.h;y++) for(let x=0;x<this.grid.w;x++){
+			if(hideSet && hideSet.has(`${x},${y}`)) continue;
+			const v=this.grid.cells[y][x]; if(v){ drawTile(ctx, x0+x*cell, y0+y*cell, cell, pieceColor(v)); }
+		}
+		// Ghost
+		{
+			const gy = computeGhostY(this.grid, this.active, this.x, this.y);
+			const mat=this.active.mat; const x0p=this.x;
+			for(let j=0;j<4;j++){
+				for(let i=0;i<4;i++){
+					if(!mat[j][i]) continue; const gx=x0p+i, gy2=gy+j; if(gx<0||gx>=this.grid.w) continue;
+					const px=x0+gx*cell, py=y0+gy2*cell; ctx.save(); ctx.globalAlpha=(gy2<0?0.35:0.75); drawGhostCell(ctx, px, py, cell); ctx.restore();
+				}
+			}
+		}
+		// Pièce active, avec transparence si au-dessus
+		{
+			const mat=this.active.mat; const yAct=Math.floor(this.y); const xAct=this.x; const col=pieceColor(this.active.key);
+			for(let j=0;j<4;j++){
+				for(let i=0;i<4;i++){
+					if(!mat[j][i]) continue; const gx=xAct+i, gy=yAct+j; if(gx<0||gx>=this.grid.w) continue;
+					const px=x0+gx*cell, py=y0+gy*cell; ctx.save(); if(gy<0) ctx.globalAlpha=0.45; drawTile(ctx, px, py, cell, col); ctx.restore();
+				}
+			}
+		}
+		// Animation de chute rapide (overlay)
+		if(this._dropAnim){
+			const a=this._dropAnim; const k=Math.min(1, a.t/a.dur); const kk = (t=> 1-Math.pow(1-t,3))(k);
+			const yInterp=a.yStart + (a.yEnd-a.yStart)*kk;
+			for(let j=0;j<4;j++){
+				for(let i=0;i<4;i++){
+					if(!a.mat[j][i]) continue; const gx=a.x+i; const gyf=yInterp+j; if(gx<0||gx>=this.grid.w) continue;
+					const px=x0+gx*cell, py=y0+gyf*cell; ctx.save(); ctx.globalAlpha=0.9; drawTile(ctx, px, py, cell, a.color); ctx.restore();
+				}
+			}
+		}
 		// Opp
 		for(let y=0;y<this.oppGrid.h;y++) for(let x=0;x<this.oppGrid.w;x++){ const v=this.oppGrid.cells[y][x]; if(v){ drawTile(ctx, x0+bw+gap+x*cell, y0+y*cell, cell, pieceColor(v)); } }
-		if(this.oppActive){ drawMat(ctx, this.oppActive.mat, x0+bw+gap+this.oppActive.x*cell, y0+Math.floor(this.oppActive.y||0)*cell, cell, pieceColor(this.oppActive.key)); }
+		if(this.oppActive){
+			// Pièce active adverse, avec transparence au-dessus
+			const mat=this.oppActive.mat; const yAct=Math.floor(this.oppActive.y||0); const xAct=this.oppActive.x|0; const col=pieceColor(this.oppActive.key);
+			for(let j=0;j<4;j++){
+				for(let i=0;i<4;i++){
+					if(!mat[j][i]) continue; const gx=xAct+i, gy=yAct+j; if(gx<0||gx>=this.oppGrid.w) continue;
+					const px=x0+bw+gap+gx*cell, py=y0+gy*cell; ctx.save(); if(gy<0) ctx.globalAlpha=0.45; drawTile(ctx, px, py, cell, col); ctx.restore();
+				}
+			}
+			// Ghost adverse (si pertinent)
+			const gy = computeGhostY(this.oppGrid, this.oppActive, xAct, yAct);
+			for(let j=0;j<4;j++){
+				for(let i=0;i<4;i++){
+					if(!mat[j][i]) continue; const gx=xAct+i, gy2=gy+j; if(gx<0||gx>=this.oppGrid.w) continue;
+					const px=x0+bw+gap+gx*cell, py=y0+gy2*cell; ctx.save(); ctx.globalAlpha=(gy2<0?0.35:0.75); drawGhostCell(ctx, px, py, cell); ctx.restore();
+				}
+			}
+		}
 		// Labels
 		ctx.fillStyle='#cbd5e1'; ctx.font='14px system-ui,Segoe UI,Roboto';
 		ctx.textAlign='center'; ctx.fillText(this.selfName||'Moi', x0+bw/2, y0-14); ctx.fillText(this.oppName||'Adversaire', x0+bw+gap+bw/2, y0-14);
@@ -106,9 +162,24 @@ export class MultiplayerGameScreen extends BaseGameScreen{
 
 	// Hooks BaseGameScreen
 	onRotate(){ const r=rotateCW(this.active.mat); if(!collide(this.grid,{mat:r},this.x,this.y)) this.active.mat=r; }
-	onHardDrop(){ while(!collide(this.grid,this.active,this.x,this.y+1)) this.y++; lock(this); this.sendState(); }
+	onRotateCCW(){ const r=rotateCW(rotateCW(rotateCW(this.active.mat))); if(!collide(this.grid,{mat:r},this.x,this.y)) this.active.mat=r; }
+	onHardDrop(){
+		// Préparer animation
+		const startY = Math.floor(this.y);
+		const endY = computeGhostY(this.grid, this.active, this.x, this.y);
+		const pieceCopy = { mat: this.active.mat.map(r=>r.slice()) };
+		const color = pieceColor(this.active.key);
+		const finalCells = []; for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(pieceCopy.mat[j][i]) finalCells.push({ x:this.x+i, y:endY+j });
+		const dist = Math.max(0, (endY - startY));
+		const dur = Math.max(0.09, Math.min(0.22, 0.06 + dist*0.015));
+		this._dropAnim = { mat: pieceCopy.mat, color, x:this.x, yStart:startY, yEnd:endY, t:0, dur, finalCells };
+		// Verrouiller immédiatement pour le gameplay et envoyer l'état
+		this.y = endY; while(!collide(this.grid,this.active,this.x,this.y+1)) this.y++; // s'assure d'être posé
+		lock(this); this.sendState();
+	}
 	onMove(step){ const nx = this.x + Math.sign(step); if(!collide(this.grid,this.active,nx,this.y)){ this.x = nx; this.lockTimer=0; } }
 	onSoftDropTick(dt){ this.dropAcc += dt*this.gravity*18; }
+	onHold(){ /* Hold non pris en charge en multi pour l’instant */ }
 
 	// Synchronisation serveur
 	sendState(){

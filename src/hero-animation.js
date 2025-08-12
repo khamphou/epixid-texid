@@ -13,7 +13,8 @@ const TETROMINOS = {
   T:[[0,1,0,0],[1,1,1,0],[0,0,0,0],[0,0,0,0]],
   Z:[[1,1,0,0],[0,1,1,0],[0,0,0,0],[0,0,0,0]],
 };
-const COLORS = { I:'#7DD3FC', J:'#60A5FA', L:'#F59E0B', O:'#FDE047', S:'#22C55E', T:'#A78BFA', Z:'#EF4444' };
+// Palette monochrome bleu néon (variantes pour éviter l'uniformité)
+const BLUE_PALETTE = ['#7DD3FC', '#60A5FA', '#38BDF8', '#93C5FD', '#67E8F9'];
 const KEYS = Object.keys(TETROMINOS);
 
 function shade(hex, amt){
@@ -37,15 +38,23 @@ function resize(){
 function makeBlock(){
   const key = KEYS[(Math.random()*KEYS.length)|0];
   const mat = TETROMINOS[key];
-  const cell = 18 + Math.random()*10;
+  // profondeur: 0 (loin) -> 1 (près)
+  const depth = Math.random()*0.8 + 0.2; // éviter 0 strict
+  const baseCell = 16; // taille de base
+  const cell = baseCell + depth*16; // 16..32 px (avant DPR)
+  const color = BLUE_PALETTE[(Math.random()*BLUE_PALETTE.length)|0];
+  const speed = 8 + depth*28; // plus proche -> plus rapide
+  const blur = 6 + depth*14; // glow plus marqué au premier plan
+  const alpha = 0.4 + depth*0.55; // 0.4..0.95
   return {
-    key, mat, color: COLORS[key],
+    key, mat, color,
     x: Math.random()*cssW,
-    y: -Math.random()*cssH*0.3,
-    vy: 20 + Math.random()*60,
+    y: -Math.random()*cssH*0.4,
+    vy: speed,
     rot: Math.random()*Math.PI*2,
-    rotSpeed: (-0.6 + Math.random()*1.2),
-    cell
+    rotSpeed: (-0.25 + Math.random()*0.5), // rotations lentes
+    cell,
+    depth, blur, alpha
   };
 }
 
@@ -56,25 +65,45 @@ function draw(ts){
   // clear
   fxCtx.save(); fxCtx.setTransform(1,0,0,1,0,0); fxCtx.clearRect(0,0,fxCvs.width,fxCvs.height); fxCtx.restore();
   const dt = 1/60;
-  const target = Math.max(24, Math.floor(cssW*cssH/55000));
+  // densité légèrement réduite pour un rendu élégant
+  const target = Math.max(18, Math.floor(cssW*cssH/80000));
   if(blocks.length < target){ blocks.push(makeBlock()); }
   for(const b of blocks){
     b.y += b.vy*dt; b.rot += b.rotSpeed*dt;
     const m=b.mat; let minX=4,maxX=0,minY=4,maxY=0; for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(m[j][i]){ minX=Math.min(minX,i); maxX=Math.max(maxX,i); minY=Math.min(minY,j); maxY=Math.max(maxY,j); }
     const w=maxX-minX+1, h=maxY-minY+1; const cell=b.cell;
-    fxCtx.save(); fxCtx.translate(b.x, b.y); fxCtx.rotate(b.rot); fxCtx.globalAlpha = 0.95; fxCtx.shadowColor='rgba(56,189,248,0.28)'; fxCtx.shadowBlur=14;
+    fxCtx.save(); fxCtx.translate(b.x, b.y); fxCtx.rotate(b.rot); fxCtx.globalAlpha = b.alpha;
+    // Pass 1: glow externe (addition)
+    const prevComp = fxCtx.globalCompositeOperation; fxCtx.globalCompositeOperation = 'lighter';
+    fxCtx.shadowColor = 'rgba(56,189,248,0.55)'; // cyan
+    fxCtx.shadowBlur = b.blur * dpr;
     const offx = -(w*cell)/2, offy=-(h*cell)/2;
     for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(m[j][i]){
+      const px=offx+(i-minX)*cell, py=offy+(j-minY)*cell; roundRect(fxCtx, px+2, py+2, cell-4, cell-4, Math.max(4, cell*0.18)); fxCtx.fillStyle=b.color; fxCtx.fill();
+    }
+    fxCtx.globalCompositeOperation = prevComp;
+    // Pass 2: corps "verre" avec dégradés et reflets
+    for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(m[j][i]){
       const px=offx+(i-minX)*cell, py=offy+(j-minY)*cell;
+      // dégradé vertical principal
       const g = fxCtx.createLinearGradient(px,py,px,py+cell);
-      g.addColorStop(0, shade(b.color, 10)); g.addColorStop(1, shade(b.color,-12));
-      fxCtx.fillStyle=g; roundRect(fxCtx, px+2, py+2, cell-4, cell-4, 5); fxCtx.fill();
-      fxCtx.strokeStyle='rgba(0,0,0,.28)'; fxCtx.lineWidth=1.5; roundRect(fxCtx, px+2, py+2, cell-4, cell-4, 5); fxCtx.stroke();
+      g.addColorStop(0, shade(b.color, 30));
+      g.addColorStop(0.55, shade(b.color, -8));
+      g.addColorStop(1, shade(b.color, -18));
+      fxCtx.fillStyle=g; roundRect(fxCtx, px+2, py+2, cell-4, cell-4, Math.max(4, cell*0.18)); fxCtx.fill();
+      // liseré clair
+      fxCtx.strokeStyle=shade(b.color, 40); fxCtx.lineWidth=1; roundRect(fxCtx, px+2.5, py+2.5, cell-5, cell-5, Math.max(3, cell*0.16)); fxCtx.stroke();
+      // reflet doux haut-gauche
+      const rg = fxCtx.createRadialGradient(px+cell*0.35, py+cell*0.35, 0, px+cell*0.35, py+cell*0.35, cell*0.6);
+      rg.addColorStop(0, 'rgba(255,255,255,0.28)'); rg.addColorStop(1, 'rgba(255,255,255,0)');
+      fxCtx.fillStyle = rg; roundRect(fxCtx, px+2, py+2, cell-4, cell-4, Math.max(4, cell*0.18)); fxCtx.fill();
+      // trait d'ombre interne bas
+      fxCtx.strokeStyle='rgba(0,0,0,0.25)'; fxCtx.lineWidth=1; fxCtx.beginPath(); fxCtx.moveTo(px+5, py+cell-4); fxCtx.lineTo(px+cell-5, py+cell-4); fxCtx.stroke();
     }
     fxCtx.restore();
   }
   // recycle
-  for(let i=0;i<blocks.length;i++) if(blocks[i].y > cssH + 80){ blocks[i] = makeBlock(); blocks[i].y = -60; blocks[i].x = Math.random()*cssW; }
+  for(let i=0;i<blocks.length;i++) if(blocks[i].y > cssH + 120){ const depth = blocks[i].depth; blocks[i] = makeBlock(); blocks[i].y = -80 - Math.random()*100; blocks[i].x = Math.random()*cssW; }
   rafId = requestAnimationFrame(draw);
 }
 
@@ -84,7 +113,7 @@ export function initHeroAnimation(){
   fxCtx = fxCvs.getContext('2d');
   resize();
   try{ const hero = document.querySelector('.hero'); if(hero && window.ResizeObserver){ const ro = new ResizeObserver(()=> resize()); ro.observe(hero); } }catch{}
-  seed(28);
+  seed(22);
 }
 
 export function startHeroAnimation(){ if(!fxCtx) initHeroAnimation(); if(rafId) return; rafId = requestAnimationFrame(draw); }

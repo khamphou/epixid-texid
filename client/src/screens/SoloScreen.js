@@ -20,8 +20,11 @@ export class SoloScreen extends BaseGameScreen {
   // Cacher le bouton IA Training en Solo
   const easy = document.getElementById('easy-btn');
   const aiDD = document.getElementById('ai-dd');
+  const cop = document.getElementById('btn-copilot');
   if(easy){ easy.classList.add('hidden'); easy.setAttribute('aria-expanded','false'); easy.setAttribute('aria-pressed','false'); easy.classList.remove('active','easy-prudent','easy-conservateur','easy-equilibre','easy-agressif'); }
   if(aiDD){ aiDD.classList.add('hidden'); }
+  // Masquer Copilot hors Training
+  if(cop){ cop.classList.add('hidden'); cop.classList.remove('active'); cop.setAttribute('aria-pressed','false'); }
     }catch{}
   this.grid = new Grid(10,20); this.bag=new Bag();
   // Démarrage: pas de pièce active posée, elle arrivera depuis NEXT via une animation

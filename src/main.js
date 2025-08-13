@@ -2547,34 +2547,54 @@ function sanitizeHost(v){
 // getServerHost n'est plus utilisé; conserver pour compat si référencé
 function getServerHost(){ return location.hostname; }
 
-function connectWS(){
+function connectWS(attemptIndex){
   if(ws && ws.readyState===1) return;
   if(wsConnecting) return; wsConnecting = true;
   try{
     const httpOrigin = getServerOrigin();
-    // En dev, getServerOrigin() renvoie '' (proxy HTTP via Vite). Pour WS, se connecter en direct au serveur MP.
-    const wsUrl = httpOrigin
-      ? httpOrigin.replace(/^http(s?):\/\//i, 'ws$1://')
-      : `ws://${location.hostname}:8787`;
+    // Ports candidats en dev si pas d'origin HTTP explicite
+    const CANDIDATE_PORTS = [8787, 8788, 8789];
+    const lastPort = Number(sessionStorage.getItem('tetris_ws_port')||'0');
+    let wsUrl = '';
+    if(httpOrigin){
+      wsUrl = httpOrigin.replace(/^http(s?):\/\//i, 'ws$1://');
+    } else {
+      const idx = Math.max(0, Number.isFinite(attemptIndex) ? attemptIndex : (lastPort? Math.max(0, CANDIDATE_PORTS.indexOf(lastPort)) : 0));
+      const port = CANDIDATE_PORTS[Math.min(idx, CANDIDATE_PORTS.length-1)] || 8787;
+      wsUrl = `ws://${location.hostname}:${port}`;
+    }
     ws = new WebSocket(wsUrl);
     ws.onopen = ()=>{
+      // mémoriser le port qui marche en dev
+      try{
+        if(!httpOrigin){
+          const m = /:(\d+)$/.exec(wsUrl);
+          if(m && m[1]) sessionStorage.setItem('tetris_ws_port', String(m[1]));
+        }
+      }catch{}
       // envoyer le nom et démarrer le heartbeat
-  try{ ws.send(JSON.stringify({ type:'hello', name: playerName||'Player', cid: connId, pid: playerId })); }catch{}
+      try{ ws.send(JSON.stringify({ type:'hello', name: playerName||'Player', cid: connId, pid: playerId })); }catch{}
       // Heartbeat toutes les 5s
       try{
         if(window._hb) clearInterval(window._hb);
         window._hb = setInterval(()=>{
-      try{ if(ws && ws.readyState===1){ ws.send(JSON.stringify({ type:'ping', cid: connId })); } }catch{}
+          try{ if(ws && ws.readyState===1){ ws.send(JSON.stringify({ type:'ping', cid: connId })); } }catch{}
         }, 5000);
       }catch{}
       wsConnecting = false;
     };
     ws.onclose = (ev)=>{
       try{ if(window._hb) { clearInterval(window._hb); window._hb=null; } }catch{}
-      wsConnecting = false;
+      const wasConnecting = wsConnecting; wsConnecting = false;
       // If closed due to cid conflicts or rate-limit, do not auto-reconnect
       if(ev && (ev.code === 4001 || ev.code === 4002 || ev.code === 4003)){ return; }
-      setTimeout(connectWS, 2000);
+      // Essayer prochain port en dev si aucune origin HTTP
+      if(!httpOrigin){
+        const curr = Math.max(0, Number.isFinite(attemptIndex) ? attemptIndex : 0);
+        const next = curr + 1;
+        if(next < 3){ setTimeout(()=> connectWS(next), 400); return; }
+      }
+      setTimeout(()=> connectWS(0), 1200);
     };
     ws.onmessage = (ev)=>{
       let msg; try{ msg = JSON.parse(ev.data); }catch{return}

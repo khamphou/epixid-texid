@@ -36,6 +36,7 @@ function bindHomeDOM(){
   // Placeholder
   qs('#btn-start-arcade')?.addEventListener('click', ()=>{});
   qs('#btn-start-multi')?.addEventListener('click', ()=> startMulti());
+  qs('#btn-start-battle')?.addEventListener('click', ()=> startBattle());
 
   function startSolo(modeId){
     // Masquer le hero DOM et afficher le canvas, puis demander au HomeScreen de lancer Solo
@@ -92,6 +93,15 @@ function bindHomeDOM(){
     // Pousser le Lobby multi
     const mod = await import('./screens/MultiplayerLobbyScreen.js');
     core.sm.replace(new mod.MultiplayerLobbyScreen(core));
+    try{ audio.setMusicIntensity?.(0.25); }catch{}
+  }
+  async function startBattle(){
+    navigateToCanvas();
+    try{ stopHero?.(); stopHero = null; }catch{}
+    try{ document.getElementById('drawer-credits')?.classList.remove('open'); }catch{}
+    try{ document.getElementById('dlg-top10')?.close?.(); }catch{}
+    const mod = await import('./screens/BattleMenuScreen.js');
+    core.sm.replace(new mod.BattleMenuScreen(core));
     try{ audio.setMusicIntensity?.(0.25); }catch{}
   }
 }

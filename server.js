@@ -6,10 +6,13 @@ import { WebSocketServer } from 'ws';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import yaml from 'yaml';
 
 const app = express();
 const httpServer = createServer(app);
 const wss = new WebSocketServer({ server: httpServer });
+// Avoid unhandled 'error' events bubbling from the HTTP server (e.g., EADDRINUSE)
+try{ wss.on('error', (err)=>{ try{ console.warn('[WS] Server error:', err?.code||err?.message||err); }catch{} }); }catch{}
 // Port par défaut (modifiable via env). En cas de conflit, nous tenterons les suivants.
 const BASE_PORT = Number(process.env.PORT || 8787);
 let _listenPort = BASE_PORT;
@@ -50,6 +53,9 @@ const lastHelloByCid = new Map();
 //   startedAt:number|null, countdownTimer: NodeJS.Timeout|null
 // }
 const rooms = new Map();
+// Simple gestion de canaux de discussion (zones) pour les menus par mode
+// zones: Map<string, Set<ws>>
+const zones = new Map();
 
 function makeId(){
   return Math.random().toString(36).slice(2,8).toUpperCase();
@@ -228,6 +234,126 @@ app.post('/top10', (req,res)=>{
   res.json({ ok:true, accepted, mode, score });
 });
 
+// ---- Modes (index + détail) ----
+// Données provisoires + support dynamique via /modes (YAML)
+let _modesIndex = [
+  { id:'daily_tspin_rush', title:'Daily — T-Spin Rush', description:'Série d’exos pour enchaîner des T-Spins (solo/training).', category:'Training', visibility:'public', mode:'solo' },
+  { id:'sprint_40l', title:'Sprint 40L', description:'Détruisez 40 lignes le plus vite possible (solo).', category:'Time Attack', visibility:'public', mode:'solo' },
+  { id:'br10', title:'Battle Royale 10', description:'Affrontez 1v1 (multi) — démo lobby.', category:'Battle Royale', visibility:'public', mode:'multi' }
+];
+function _cfgDailyTspinRush(){
+  return {
+    id:'daily_tspin_rush', version:1, title:'Daily — T-Spin Rush', description:'Entraînement T-Spin', visibility:'public', mode:'solo',
+    lobby:{minPlayers:1,maxPlayers:1,seedPolicy:'perPlayer'},
+    rules:{
+      attackTable:{ single:0,double:1,triple:2,tetris:4, tspin:{single:2,double:4,triple:6}, backToBackBonus:1, comboTable:[0,1,1,2,2,3,3,4,4,5] },
+      garbage:{ delayMs:600, telegraphMs:600, messiness:0.35, cancelPolicy:'net' },
+      speed:{ lockDelayMs:500, gravityCurve:[{t:0,gravity:1}] },
+      inputs:{ dasMs:110, arrMs:10, allow180:true, allowHold:true, holdConsumesLock:true },
+      badges:{ enabled:false, perKOPercent:0, maxStacks:0 }
+    },
+    objectives:{ winCondition:'first_to_objectives', targets:{ survive:{ seconds:9999 } } },
+    leaderboard:{ scope:'none', scoring:'score' }
+  };
+}
+function _cfgSprint40L(){
+  return {
+    id:'sprint_40l', version:1, title:'Sprint 40L', description:'40 lignes — chrono', visibility:'public', mode:'solo',
+    lobby:{minPlayers:1,maxPlayers:1,seedPolicy:'perPlayer'},
+    rules:{
+      attackTable:{ single:0,double:0,triple:0,tetris:0, tspin:{single:0,double:0,triple:0}, backToBackBonus:0, comboTable:[0,0,0,0,0] },
+      garbage:{ delayMs:0, telegraphMs:0, messiness:0, cancelPolicy:'net' },
+      speed:{ lockDelayMs:500, gravityCurve:[{t:0,gravity:1}] },
+      inputs:{ dasMs:110, arrMs:10, allow180:true, allowHold:true, holdConsumesLock:true },
+      badges:{ enabled:false, perKOPercent:0, maxStacks:0 }
+    },
+    objectives:{ winCondition:'first_to_objectives', targets:{ lines_cleared:{ count:40 } } },
+    leaderboard:{ scope:'none', scoring:'time' }
+  };
+}
+function _cfgBR10(){
+  return {
+    id:'br10', version:1, title:'Battle Royale 10', description:'Affrontement 1v1 multi (démo).', visibility:'public', mode:'multi',
+    lobby:{minPlayers:2,maxPlayers:2,seedPolicy:'shared'},
+    rules:{
+      attackTable:{ single:0,double:1,triple:2,tetris:4, tspin:{single:2,double:4,triple:6}, backToBackBonus:1, comboTable:[0,1,1,2,2,3,3,4,4,5] },
+      garbage:{ delayMs:600, telegraphMs:600, messiness:0.4, cancelPolicy:'net' },
+      speed:{ lockDelayMs:480, gravityCurve:[{t:0,gravity:1.15},{t:60,gravity:1.4},{t:120,gravity:1.7}] },
+      inputs:{ dasMs:100, arrMs:10, allow180:true, allowHold:true, holdConsumesLock:true },
+      badges:{ enabled:false, perKOPercent:0, maxStacks:0 }
+    },
+    objectives:{ winCondition:'first_to_objectives', targets:{ survive:{ seconds:9999 } } },
+    leaderboard:{ scope:'none', scoring:'score' }
+  };
+}
+const _cfgById = {
+  daily_tspin_rush: _cfgDailyTspinRush,
+  sprint_40l: _cfgSprint40L,
+  br10: _cfgBR10,
+};
+
+function resolveModeCfg(id){
+  try{
+    if(!id) return null;
+    if(_dynCfgById && _dynCfgById[id]) return _dynCfgById[id];
+    if(_cfgById[id]) return _cfgById[id]();
+    return null;
+  }catch{ return null; }
+}
+
+// Chargement dynamique depuis ./modes/*.y{a}ml si présents
+let _dynCfgById = null; // id -> cfg
+let _dynIndex = null;   // list of meta
+function loadModesDir(){
+  try{
+    const modesDir = path.resolve(__dirname, 'modes');
+    if(!fs.existsSync(modesDir)) { _dynCfgById=null; _dynIndex=null; return; }
+    const files = fs.readdirSync(modesDir).filter(f=>/\.(ya?ml)$/i.test(f));
+    const map = {}; const idx = [];
+    for(const f of files){
+      try{
+        const raw = fs.readFileSync(path.join(modesDir, f), 'utf-8');
+        const cfg = yaml.parse(raw);
+        if(cfg && cfg.id){ map[cfg.id] = cfg; idx.push({ id: cfg.id, title: cfg.title||cfg.id, description: cfg.description||'', category: cfg.category||'Modes', visibility: cfg.visibility||'public', mode: cfg.mode||'solo' }); }
+      }catch(err){ try{ console.warn('[MODES] Fail parsing', f, err?.message||err); }catch{} }
+    }
+    _dynCfgById = Object.keys(map).length ? map : null;
+    _dynIndex = Array.isArray(idx) && idx.length ? idx : null;
+    try{ console.log(`[MODES] Loaded dynamic: count=${idx.length}`); }catch{}
+  }catch{ _dynCfgById=null; _dynIndex=null; }
+}
+// initial load + watcher
+loadModesDir();
+try{ fs.watch(path.resolve(__dirname, 'modes'), { persistent:true }, ()=>{ try{ loadModesDir(); }catch{} }); }catch{}
+
+app.get('/modes/index', (req,res)=>{
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  // Pas de cache pour refléter les ajouts sans rebuild
+  try{
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+  }catch{}
+  const list = _dynIndex || _modesIndex;
+  res.json({ list });
+});
+
+app.get('/modes/:id', (req,res)=>{
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const id = String(req.params.id||'');
+  let cfg = null;
+  if(_dynCfgById && _dynCfgById[id]) cfg = _dynCfgById[id];
+  else if(_cfgById[id]) cfg = _cfgById[id]();
+  if(!cfg){ return res.status(404).json({ error:'mode_not_found', id }); }
+  // Idempotent no-store
+  try{
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+  }catch{}
+  res.json(cfg);
+});
+
 // Endpoint de debug: retourner les scores (non tronqués) par mode
 app.get('/scores', (req,res)=>{
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -263,7 +389,8 @@ app.get('*', (req, res, next)=>{
     req.path.startsWith('/rooms') ||
     req.path.startsWith('/players') ||
     req.path.startsWith('/purge') ||
-    req.path.startsWith('/top10')
+  req.path.startsWith('/top10') ||
+  req.path.startsWith('/modes')
   ) return next();
   try{
     // Désactiver le cache pour index.html afin d’éviter de servir un ancien bundle
@@ -357,11 +484,11 @@ wss.on('connection', (ws)=>{
       ws.isAlive = true;
       try{ console.log(`[WS] Ping: id=${ws.id} cid=${ws.cid||'-'}`); }catch{}
       return;
-    }
-    if(type === 'hello'){
-      ws.name = ((msg.name||'')+'').slice(0,32) || 'Player';
+    } else if(type === 'hello'){
+      // handshake: set identity
       if(msg.cid) ws.cid = String(msg.cid);
       if(msg.pid) ws.pid = String(msg.pid);
+      ws.name = (msg.name||'')+'';
       if(ws._helloGuard){ try{ clearTimeout(ws._helloGuard); }catch{} ws._helloGuard = null; }
       ws.isAlive = true; ws.lastSeen = Date.now();
       try{ console.log(`[WS] Hello: id=${ws.id} cid=${ws.cid||'-'} name="${ws.name}"`); }catch{}
@@ -371,35 +498,52 @@ wss.on('connection', (ws)=>{
           const nowTs = Date.now();
           const prevHello = lastHelloByCid.get(ws.cid) || 0;
           lastHelloByCid.set(ws.cid, nowTs);
-          // rate limit: if hellos come too fast (< 800ms), reject newcomer
-          if(nowTs - prevHello < 800){
-            try{ console.log(`[WS] Rate-limit cid, closing newcomer: id=${ws.id} cid=${ws.cid}`); }catch{}
-            try{ ws.close(4003, 'cid_rate_limit'); }catch{}
-            return; // don't proceed further
+          // rate limit: if hellos come too fast from same cid (< 200ms), just ignore (don't close)
+          if(nowTs - prevHello < 200){
+            try{ console.log(`[WS] Rate-limit cid (ignored duplicate hello): id=${ws.id} cid=${ws.cid}`); }catch{}
           }
-          let keptExisting = false;
-          for(const c of Array.from(wss.clients)){
-            if(c!==ws && c.cid === ws.cid){
-              // If existing connection is OPEN, prefer keeping it; close the newcomer
-              if(c.readyState === 1 /* OPEN */){
-                try{ console.log(`[WS] Duplicate cid, keeping existing: keep id=${c.id} close newcomer id=${ws.id} cid=${ws.cid}`); }catch{}
-                try{ ws.close(4002, 'cid_in_use'); }catch{}
-                keptExisting = true;
-                break;
-              } else {
-                // otherwise, close the stale previous
-                try{ console.log(`[WS] Duplicate cid, closing previous (stale): keep id=${ws.id} close id=${c.id} cid=${ws.cid}`); }catch{}
-                try{ c.close(4001, 'duplicate_cid'); }catch{}
-              }
-            }
-          }
-          if(keptExisting){ return; }
+          // Allow multiple connections per cid; no eviction
         }
       }catch{}
       // broadcast players list
       for(const c of wss.clients){ try{ c.send(JSON.stringify({ type:'players', players: playersInfo() })); }catch{} }
-  // log snapshot for diagnostics
-  logLobbySnapshot('after hello');
+      // log snapshot for diagnostics
+      logLobbySnapshot('after hello');
+      return;
+    } else if(type === 'chat'){
+      // Message texte (chat) relayé à tous les clients du salon
+      const text = (msg && msg.text) ? String(msg.text).slice(0, 280) : '';
+      if(!text) return;
+      const r = rooms.get(ws.room);
+      if(r && r.clients){
+        for(const c of r.clients){ try{ send(c, { type:'chat', from: ws.name||ws.cid||'Player', text }); }catch{} }
+      }
+      return;
+    } else if(type === 'lobby_chat'){
+      // Chat global dans les menus (hors salon): diffuser à tous les clients connectés
+      const text = (msg && msg.text) ? String(msg.text).slice(0, 280) : '';
+      if(!text) return;
+      const from = ws.name || ws.cid || 'Player';
+      for(const c of wss.clients){ try{ send(c, { type:'lobby_chat', from, text }); }catch{} }
+      return;
+    } else if(type === 'zone_sub'){
+      const zone = String(msg.zone||''); if(!zone) return;
+      if(!zones.has(zone)) zones.set(zone, new Set());
+      zones.get(zone).add(ws);
+      try{ console.log(`[ZONE] sub: ${zone} id=${ws.id}`); }catch{}
+      return;
+    } else if(type === 'zone_unsub'){
+      const zone = String(msg.zone||''); if(!zone) return;
+      zones.get(zone)?.delete(ws);
+      try{ console.log(`[ZONE] unsub: ${zone} id=${ws.id}`); }catch{}
+      return;
+    } else if(type === 'zone_chat'){
+      const zone = String(msg.zone||''); const text = (msg && msg.text) ? String(msg.text).slice(0, 280) : '';
+      if(!zone || !text) return;
+      const from = ws.name || ws.cid || 'Player';
+      const subs = zones.get(zone);
+      if(!subs || !subs.size) return;
+      for(const c of Array.from(subs)){ try{ send(c, { type:'zone_chat', zone, from, text }); }catch{} }
       return;
     }
   if(type === 'create'){
@@ -411,7 +555,8 @@ wss.on('connection', (ws)=>{
         return send(ws, { type:'error', message:'Vous possédez déjà un salon.' });
       }
     const id = makeId();
-  const r = { id, name: (msg.name||null), ownerName: (msg.ownerName||null), ownerTop: Number(msg.ownerTop||0), clients: new Set(), observers: new Set(), ready: new Set(), started: false, seed: null, done: new Set(), scores: new Map(), lines: new Map(), levels: new Map(), grids: new Map(), actives: new Map(), startedAt: null, owner: ws, ownerAddr: ip||null, ownerPid: ws.pid||null, countdownTimer: null, lastEndedTs: null };
+    const modeId = (msg && msg.modeId) ? String(msg.modeId) : null;
+  const r = { id, name: (msg.name||null), ownerName: (msg.ownerName||null), ownerTop: Number(msg.ownerTop||0), modeId, clients: new Set(), observers: new Set(), ready: new Set(), started: false, seed: null, done: new Set(), scores: new Map(), lines: new Map(), levels: new Map(), grids: new Map(), actives: new Map(), startedAt: null, owner: ws, ownerAddr: ip||null, ownerPid: ws.pid||null, countdownTimer: null, lastEndedTs: null };
       rooms.set(id, r);
       ws.ownsRoomId = id;
       join(ws, id);
@@ -564,6 +709,13 @@ wss.on('connection', (ws)=>{
               const initScores = Array.from(r.clients).map(c=>({ id: c.id, name: c.name||null, score: 0, lines: 0, level: 1, ready: !!(r.ready && r.ready.has(c)), dead: false }));
               for(const c of r.clients){ send(c, { type:'scores', list: initScores }); }
               if(r.observers && r.observers.size){ for(const o of r.observers){ send(o, { type:'scores', room: r.id, list: initScores }); } }
+              // Envoyer la configuration du mode si connue (match_start)
+              try{
+                const cfg = resolveModeCfg(r.modeId);
+                if(cfg){ for(const c of r.clients){ send(c, { type:'match_start', modeId: r.modeId, cfg }); }
+                  if(r.observers && r.observers.size){ for(const o of r.observers){ send(o, { type:'match_start', room: r.id, modeId: r.modeId, cfg }); } }
+                }
+              }catch{}
               // démarrer la manche
               for(const c of r.clients){ send(c, { type:'start', seed: r.seed, room: r.id }); }
               if(r.observers && r.observers.size){ for(const o of r.observers){ send(o, { type:'start', room: r.id }); } }
@@ -598,6 +750,13 @@ wss.on('connection', (ws)=>{
               const initScores2 = Array.from(r.clients).map(c=>({ id: c.id, name: c.name||null, score: 0, lines: 0, level: 1, ready: !!(r.ready && r.ready.has(c)), dead: false }));
               for(const c of r.clients){ send(c, { type:'scores', list: initScores2 }); }
               if(r.observers && r.observers.size){ for(const o of r.observers){ send(o, { type:'scores', room: r.id, list: initScores2 }); } }
+              // ré-émettre la configuration match_start pour la relance
+              try{
+                const cfg = resolveModeCfg(r.modeId);
+                if(cfg){ for(const c of r.clients){ send(c, { type:'match_start', modeId: r.modeId, cfg }); }
+                  if(r.observers && r.observers.size){ for(const o of r.observers){ send(o, { type:'match_start', room: r.id, modeId: r.modeId, cfg }); } }
+                }
+              }catch{}
               for(const c of r.clients){ send(c, { type:'start', seed: r.seed, room: r.id }); }
               if(r.observers && r.observers.size){ for(const o of r.observers){ send(o, { type:'start', room: r.id }); } }
               try{ const names = Array.from(r.clients).map(c=> c.name||c.id).join(' vs '); console.log(`[MATCH] Démarrée: room=${r.id} joueurs=${names}`); }catch{}
@@ -733,6 +892,10 @@ wss.on('connection', (ws)=>{
     }
     // if owner leaves, free ownership; if room still has clients, keep it (owner can be null)
     if(ws.ownsRoomId){ ws.ownsRoomId = null; }
+    // retirer des zones
+    try{
+      for(const [z,set] of zones.entries()){ if(set.has(ws)) set.delete(ws); }
+    }catch{}
     // rafraîchir la liste des salons pour tous
     for(const c of wss.clients){ try{ c.send(JSON.stringify({ type:'rooms', rooms: roomInfo() })); c.send(JSON.stringify({ type:'players', players: playersInfo() })); }catch{} }
   // snapshot after close

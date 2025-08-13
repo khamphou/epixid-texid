@@ -42,11 +42,28 @@ export class MultiplayerGameScreen extends BaseGameScreen{
 		this._spawnKoWait = false;
 		this._spawnKoAnchorY = null;
 		this._spawnKoDeadline = 0;
+		// Chat en partie (overlay DOM)
+		this._chat = [];
+		this._chatRoot = null;
 	}
 	async init(){
 		await super.init?.();
+		// Masquer le bouton Copilot (Training-only)
+		try{ const cop=document.getElementById('btn-copilot'); if(cop){ cop.classList.add('hidden'); cop.classList.remove('active'); cop.setAttribute('aria-pressed','false'); } }catch{}
 		// Abonnements WS
 		const push = (off)=> this._off.push(off);
+		// Charger dynamiquement les règles/objectifs envoyés par le serveur (match_start)
+		push(this.ws.on('match_start', async (m)=>{
+			try{
+				if(m && m.cfg){
+					const mf = await import('../modes/modeFactory.js');
+					const { rules, objectives } = mf.modeFactory.fromConfig(m.cfg);
+					// Appliquer aux hooks/runtime (BaseGameScreen s’appuie sur this.rules/objectives)
+					this.rules = rules || this.rules;
+					this.objectives = objectives || this.objectives;
+				}
+			}catch{}
+		}));
 		push(this.ws.on('peer', (m)=>{ this.connected = !!m.connected; }));
 		push(this.ws.on('names', (m)=>{ try{ const me = (m.list||[]).find(x=>x.id===this.selfId); const opp = (m.list||[]).find(x=>x.id!==this.selfId); if(me?.name) this.selfName = me.name; if(opp?.name) this.oppName = opp.name; }catch{} }));
 		push(this.ws.on('countdown', (_m)=>{ this._countdown = { t: 3, start: performance.now(), dur: 3000 }; try{ audio.resume?.(); audio.playStartCue?.(3); }catch{} }));
@@ -64,17 +81,22 @@ export class MultiplayerGameScreen extends BaseGameScreen{
 		push(this.ws.on('ready', (m)=>{ if(m.who && m.who!==this.selfId) this.peerReady = !!m.ready; }));
 		push(this.ws.on('gameover', (m)=>{ if(m.who && m.who!==this.selfId){ this.oppDead = true; /* pas de toast victoire (UX) */ } }));
 		push(this.ws.on('room_closed', ()=>{ this.toast('Salon fermé', { color:'#f87171' }); setTimeout(()=> this.navigateHome(), 800); }));
+		// Chat: messages reçus pendant la partie
+		push(this.ws.on('chat', (m)=>{ try{ const from=m.from||'Lui'; const t=String(m.text||''); if(t){ this._chat.push({ me:false, t:`${from}: ${t}` }); this._renderChat(); } }catch{} }));
 		// Fixer notre nom côté serveur
 		try{ const nm = (localStorage.getItem('texid_name')||'Player'); this.ws.send('name', { name: nm }); }catch{}
 		// Indiquer prêt dès init si partie déjà démarrée
 		if(!this.started){ this.ready = true; this.ws.send('ready', { ready: true }); }
 		// Intensité musique basse au lobby/compte à rebours
 		try{ audio.setMusicIntensity?.(0.3); }catch{}
+		// Monter l'UI de chat
+		this._mountChat();
 	}
 	dispose(){
 		try{ this.ws?.send('leave', {}); }catch{}
 		try{ this.ws?.close?.(); }catch{}
 		this._off.forEach(off=>{ try{ off(); }catch{} }); this._off = [];
+		try{ this._chatRoot?.remove?.(); this._chatRoot=null; }catch{}
 		super.dispose?.();
 	}
 	update(dt){
@@ -385,6 +407,40 @@ export class MultiplayerGameScreen extends BaseGameScreen{
 	}
 	handleInput(){}
 	getBoardRect(){ return this._boardRect; }
+
+	// ===== Chat en partie =====
+	_mountChat(){
+		try{
+			const r=document.createElement('div'); r.id='mp-chat'; Object.assign(r.style,{ position:'fixed', right:'14px', bottom:'14px', width:'min(360px, 92vw)', background:'linear-gradient(180deg, rgba(10,14,20,.94), rgba(10,14,20,.9))', border:'1px solid rgba(148,163,184,.25)', borderRadius:'12px', padding:'10px', color:'#e5e7eb', zIndex:30, boxShadow:'0 8px 28px rgba(0,0,0,.45)' });
+			r.innerHTML = `
+			  <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+			    <strong style="color:#93c5fd">Chat</strong>
+			    <span id="mp-chat-toast" style="font-size:12px;opacity:.8"></span>
+			  </div>
+			  <div id="mp-chat-box" style="height:120px; overflow:auto; background:rgba(255,255,255,.03); border-radius:8px; padding:8px; font:13px system-ui,Segoe UI,Roboto,Arial"></div>
+			  <div style="margin-top:8px"><input id="mp-chat-input" placeholder="Message… (Entrée)" style="width:100%; border:1px solid rgba(148,163,184,.25); background:#0f141a; color:#e5e7eb; padding:8px 10px; border-radius:8px; outline:none" /></div>
+			`;
+			document.body.appendChild(r); this._chatRoot=r;
+			const inp=r.querySelector('#mp-chat-input');
+			inp?.addEventListener('keydown', (e)=>{
+				if(e.key==='Enter'){
+					const t=String(inp.value||'').slice(0,280); if(t){
+						this._chat.push({ me:true, t:`Moi: ${t}` });
+						try{ this.ws?.send('chat', { text: t }); }catch{}
+						inp.value=''; this._renderChat();
+					}
+				}
+			});
+			this._renderChat();
+		}catch{}
+	}
+	_renderChat(){
+		try{
+			const box=this._chatRoot?.querySelector('#mp-chat-box'); if(!box) return;
+			box.innerHTML = this._chat.slice(-100).map(x=>`<div>${escapeHtml(x.t)}</div>`).join('');
+			box.scrollTop = box.scrollHeight;
+		}catch{}
+	}
 
 	// Hooks BaseGameScreen
 	onRotate(){ if(!this.active || this._countdown) return; const r=rotateCW(this.active.mat); tryApplyRotation(this, r); }

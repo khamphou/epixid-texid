@@ -8,6 +8,7 @@
   "build": "vite build",
   "preview": "vite preview --open",
   "server": "node server.js",
+  "test:dup": "node ./tools/test-dup-cid.js",
   "dev:all": "concurrently \"npm:server\" \"npm:dev\"",
   "start": "npm run build && node server.js",
   "gen:music": "node ./tools/gen-mp3.js",
@@ -24,6 +25,7 @@
   "ws": "^8.17.0",
   "lamejs": "^1.2.0",
   "ffmpeg-static": "^5.2.0",
-  "zod": "^3.23.8"
+  "zod": "^3.23.8",
+  "yaml": "^2.5.0"
   }
 }

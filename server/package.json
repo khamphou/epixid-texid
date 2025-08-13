@@ -5,7 +5,11 @@
   "private": true,
   "scripts": {
     "dev": "node ./src/index.js",
-    "check:modes": "node -e \"import('./src/modes/loader.js').then(m=>{m.loadAll(); console.log('OK ids:', m.getAllModeIds());}).catch(e=>{console.error(e); process.exit(1);});\""
+    "check:modes": "node -e \"import('./src/modes/loader.js').then(m=>{m.loadAll(); console.log('OK ids:', m.getAllModeIds());}).catch(e=>{console.error(e); process.exit(1);});\"",
+    "mod:server": "npm --prefix ../server run dev",
+    "mod:client": "vite ../client --open --port 5175",
+    "mod:all": "concurrently \"npm:mod:server\" \"npm:mod:client\""
+
   },
   "dependencies": {
     "cors": "^2.8.5",

@@ -351,6 +351,21 @@ export class BattleMenuScreen{
     this._off.push(ws.on('zone_chat', (m)=>{ if(this._chatKind!=='zone') return; const z=String(m.zone||''); if(!this._chatZone || z!==this._chatZone) return; const from=m.from||'Player'; const t=String(m.text||''); if(t){ this._chatMsgs.push({ from, t }); this._renderChat(); } }));
     // Nombre de joueurs en ligne
     this._off.push(ws.on('players', (m)=>{ try{ const n = Array.isArray(m.players)? m.players.length : 0; this._chatOnline = n; this._renderChat(); }catch{} }));
+    // Mises à jour 'rooms' en temps réel (diffusées par le serveur lobby)
+    this._off.push(ws.on('rooms', (m)=>{
+      try{
+        const arr = Array.isArray(m?.rooms) ? m.rooms : [];
+        this._rooms = arr;
+        if(this._level==='root'){
+          this._renderRoot();
+        } else if(this._level==='rooms'){
+          this._renderRoomsLevel();
+        } else if(this._level==='cat'){
+          // Si l’onglet actif est "Salles (BR)", re-render dedans
+          try{ const items=this._catItems(); const cur=items[this._catSelIdx]; if(cur && cur.special==='rooms'){ this._renderRoomsInside(); } }catch{}
+        }
+      }catch{}
+    }));
     // Bind input
     const inp = this.root.querySelector('#bm-chat-input');
     inp?.addEventListener('keydown', (e)=>{

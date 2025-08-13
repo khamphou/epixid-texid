@@ -28,6 +28,7 @@ attachGameSocket(io);
 
 // --- Compat lobby HTTP minimal (rooms/players) ---
 const rooms = new Map();
+const zones = new Map(); // zoneId -> Set<ws>
 const wss = new WebSocketServer({ noServer: true });
 
 function roomInfo(){
@@ -86,6 +87,11 @@ const lastHelloByCid = new Map();
 wss.on('connection', (ws)=>{
 	ws.id = makeId(); ws.room = null; ws.name = null; ws.ownsRoomId = null; ws.lastSeen = Date.now(); ws.cid = null; ws.isAlive = true; ws.pid = null;
 	ws.on('pong', ()=>{ ws.lastSeen=Date.now(); ws.isAlive=true; });
+	// Envoyer un snapshot initial aux nouveaux connectés (utile pour remplir le salon immédiatement)
+	try{
+		send(ws, { type:'rooms', rooms: roomInfo() });
+		send(ws, { type:'players', players: playersInfo() });
+	}catch{}
 	ws.on('message', (buf)=>{
 		let msg; try{ msg = JSON.parse(buf); }catch{ return; }
 		const type = msg?.type; ws.lastSeen = Date.now(); ws.isAlive = true;
@@ -95,6 +101,8 @@ wss.on('connection', (ws)=>{
 			if(msg.pid) ws.pid = String(msg.pid);
 			ws.name = (msg.name||'')+'';
 			if(ws.cid){ const now=Date.now(); const prev=lastHelloByCid.get(ws.cid)||0; lastHelloByCid.set(ws.cid, now); if(now - prev < 200){ /* no eviction */ } }
+			// Retourner au client un snapshot frais et informer le lobby
+			try{ send(ws, { type:'rooms', rooms: roomInfo() }); }catch{}
 			for(const c of wss.clients){ send(c, { type:'players', players: playersInfo() }); }
 			return;
 		}
@@ -113,15 +121,40 @@ wss.on('connection', (ws)=>{
 			for(const c of wss.clients){ send(c, { type:'rooms', rooms: roomInfo() }); send(c, { type:'players', players: playersInfo() }); }
 			return;
 		}
-		if(type==='lobby_chat'){
+			if(type==='lobby_chat'){
 			const text = (msg && msg.text) ? String(msg.text).slice(0, 280) : '';
 			if(!text) return; const from = ws.name || ws.cid || 'Player';
 			for(const c of wss.clients){ send(c, { type:'lobby_chat', from, text }); }
 			return;
 		}
+			// --- Zone chat minimal (utilisé par l'UI BattleMenuScreen) ---
+			if(type==='zone_sub'){
+				const z = (msg && msg.zone) ? String(msg.zone) : '';
+				if(!z) return;
+				if(!zones.has(z)) zones.set(z, new Set());
+				zones.get(z).add(ws);
+				return;
+			}
+			if(type==='zone_unsub'){
+				const z = (msg && msg.zone) ? String(msg.zone) : '';
+				if(!z) return;
+				if(zones.has(z)) zones.get(z).delete(ws);
+				return;
+			}
+			if(type==='zone_chat'){
+				const z = (msg && msg.zone) ? String(msg.zone) : '';
+				const text = (msg && msg.text) ? String(msg.text).slice(0, 280) : '';
+				if(!z || !text) return;
+				const from = ws.name || ws.cid || 'Player';
+				const set = zones.get(z);
+				if(set && set.size){ for(const c of set){ send(c, { type:'zone_chat', zone: z, from, text }); } }
+				return;
+			}
 	});
 	ws.on('close', ()=>{
 		const id = ws.room; if(id && rooms.has(id)){ const r = rooms.get(id); r.clients.delete(ws); r.ready.delete(ws); r.done.delete(ws); r.scores.delete(ws); if(r.clients.size===0) rooms.delete(id); }
+			// Nettoyer l'abonnement zones
+			try{ for(const set of zones.values()){ set.delete(ws); } }catch{}
 		if(ws.ownsRoomId) ws.ownsRoomId = null;
 		for(const c of wss.clients){ send(c, { type:'rooms', rooms: roomInfo() }); send(c, { type:'players', players: playersInfo() }); }
 	});

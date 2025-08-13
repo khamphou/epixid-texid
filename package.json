@@ -11,10 +11,7 @@
   "test:dup": "node ./tools/test-dup-cid.js",
   "dev:all": "concurrently \"npm:server\" \"npm:dev\"",
   "start": "npm run build && node server.js",
-  "gen:music": "node ./tools/gen-mp3.js",
-  "mod:server": "npm --prefix server run dev",
-  "mod:client": "vite client --open --port 5175",
-  "mod:all": "concurrently \"npm:mod:server\" \"npm:mod:client\""
+  "gen:music": "node ./tools/gen-mp3.js"
   },
   "devDependencies": {
     "vite": "^5.3.1",

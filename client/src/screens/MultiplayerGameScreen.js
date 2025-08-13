@@ -62,7 +62,7 @@ export class MultiplayerGameScreen extends BaseGameScreen{
 		push(this.ws.on('state', (m)=>{ if(m.who && m.who!==this.selfId){ if(Array.isArray(m.grid)) this.oppGrid.cells = m.grid.map(row=> row.slice()); this.oppActive = m.active||null; this.peerReady = !!m.ready; } }));
 		push(this.ws.on('scores', (m)=>{ try{ const me = (m.list||[]).find(x=>x.id===this.selfId); const opp = (m.list||[]).find(x=>x.id!==this.selfId); if(opp){ this.oppScore = opp.score||0; this.oppLines = opp.lines||0; } }catch{} }));
 		push(this.ws.on('ready', (m)=>{ if(m.who && m.who!==this.selfId) this.peerReady = !!m.ready; }));
-		push(this.ws.on('gameover', (m)=>{ if(m.who && m.who!==this.selfId){ this.oppDead = true; this.toast('VICTOIRE!', { color:'#22c55e', size:28, dur:1.8 }); } }));
+		push(this.ws.on('gameover', (m)=>{ if(m.who && m.who!==this.selfId){ this.oppDead = true; /* pas de toast victoire (UX) */ } }));
 		push(this.ws.on('room_closed', ()=>{ this.toast('Salon fermé', { color:'#f87171' }); setTimeout(()=> this.navigateHome(), 800); }));
 		// Fixer notre nom côté serveur
 		try{ const nm = (localStorage.getItem('texid_name')||'Player'); this.ws.send('name', { name: nm }); }catch{}

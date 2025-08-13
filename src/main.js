@@ -207,6 +207,9 @@ const next2Ctx = next2Cvs ? next2Cvs.getContext('2d') : null;
 // Miniatures overlay (mobile)
 const nextMini = document.getElementById('next-mini');
 const nextMiniCtx = nextMini ? nextMini.getContext('2d') : null;
+// HOLD preview canvas (panneau dédié)
+const holdCvs = document.getElementById('hold');
+const holdCtx = holdCvs ? holdCvs.getContext('2d') : null;
 const oppMini = document.getElementById('opp-mini');
 const oppMiniCtx = oppMini ? oppMini.getContext('2d') : null;
 // Opponent canvas (2 joueurs)
@@ -349,6 +352,11 @@ let wsConnecting = false;
 // Easy Mode state
 let easyMode = false; // activé via toggle UI
 let hint = null; // { x, rot, yLanding, score }
+// Séquence de pièce: permet de n'autoriser le calcul du hint qu'au spawn (et HOLD si branché)
+let _pieceSeq = 0; // incrémenté à chaque spawn
+let _lastHintSeq = -1; // dernière séquence pour laquelle un hint a été calculé
+// Mémo pour guider la pièce actuelle: le hint est calculé au spawn/hold uniquement
+// et n'est plus recalculé pendant la chute/rotations.
 // Profil IA (influence les poids de l'heuristique Easy)
 let aiProfile = 'equilibre'; // 'conservateur' | 'equilibre' | 'agressif'
 // Multijoueur: état client
@@ -408,8 +416,14 @@ let _toastTO = null;
 // Rejouer: préserver Easy pour la toute prochaine partie uniquement
 let nextStartPreserveEasy = false;
 let isTraining = false; // true uniquement pour les parties Training (affiche le bouton Easy)
+// Copilot (Training): IA pilote rotations/déplacements/HOLD selon le hint
+let copilotOn = false;
+let _copilotLastSeq = -1; // pour déclencher les actions au spawn/hold
 // Anti-flood emotes: max 3 / 10s
 const EMOTE_WINDOW_MS = 10000;
+// HOLD (solo/training uniquement): pièce en réserve + garde d'utilisation par pièce
+let hold = null;
+let holdUsed = false;
 const EMOTE_MAX_IN_WINDOW = 3;
 let emoteSendTimes = [];
 let emoteCooldownTO = null;
@@ -578,6 +592,9 @@ function spawn(){
   active = nextQueue.shift();
   nextQueue.push(nextFromBag());
   x = 3; y = 0;
+  _pieceSeq++;
+  // Réinitialiser l'usage du HOLD pour cette nouvelle pièce
+  holdUsed = false;
   // démarrer l'effet d'apparition
   spawnFxStart = performance.now();
   if (collide(x,y,active.mat)) {
@@ -585,6 +602,8 @@ function spawn(){
   }
   drawNext();
   // recalculer le hint pour la nouvelle pièce
+  // Politique: si Easy est OFF au spawn, verrouiller le hint pour cette pièce
+  if(!easyMode){ _lastHintSeq = _pieceSeq; hint = null; }
   computeHint();
   // broadcast après nouvelle pièce
   broadcastState();
@@ -677,9 +696,9 @@ function rotate(){
       x += dx; y += dy; active.mat = rot;
       fx.rotate();
       rotFxStart = performance.now();
-      // ROTATION: recalculer le hint pour le Mode Easy
-      try{ computeHint(); }catch{}
       broadcastState();
+  // rafraîchir guides immédiatement
+  try{ draw(); }catch{}
       return;
     }
   }
@@ -713,8 +732,8 @@ function rotateCCW(){
       x += dx; y += dy; active.mat = rot;
       fx.rotate();
       rotFxStart = performance.now();
-      try{ computeHint(); }catch{}
       broadcastState();
+  try{ draw(); }catch{}
       return;
     }
   }
@@ -741,6 +760,46 @@ function hardDrop(){
   lock();
 }
 
+// -------- HOLD (solo/training) --------
+function performHold(){
+  // Non supporté: si pas de pièce active ou en multijoueur avant le départ
+  if(!active) return false;
+  if(roomId){ /* hold non implémenté en multi pour l'instant */ return false; }
+  // Politique: un seul HOLD par pièce
+  if(holdUsed) return false;
+  const current = active;
+  // Déterminer la nouvelle active: soit on prend la pièce tenue, soit on pioche dans NEXT
+  let newActive;
+  if(hold){
+    // swap avec la hold
+    newActive = { key: hold.key, mat: hold.mat.map(r=>r.slice()) };
+    hold = { key: current.key, mat: current.mat.map(r=>r.slice()) };
+  } else {
+    // placer l'actuelle en hold, prendre la prochaine de la file
+    hold = { key: current.key, mat: current.mat.map(r=>r.slice()) };
+    if(nextQueue.length<1){ nextQueue.push(nextFromBag()); }
+    newActive = nextQueue.shift();
+    nextQueue.push(nextFromBag());
+  }
+  // Réinitialiser la position et la rotation au spawn
+  active = { key: newActive.key, mat: clone(TETROMINOS[newActive.key]) };
+  x = 3; y = 0;
+  holdUsed = true;
+  // Top-out si la nouvelle pièce ne peut pas apparaître
+  if(collide(x,y,active.mat)){
+    gameOver();
+    return true;
+  }
+  // Redessiner NEXT et plateau
+  drawNext();
+  try{ drawHold(); }catch{}
+  broadcastState();
+  try{ draw(); }catch{}
+  return true;
+}
+// Exposer pour Copilot / contrôles UI
+try{ window.__performHold = performHold; }catch{}
+
 function step(ts){
   if(!running||paused) return;
   if(!lastSpeedup) lastSpeedup = ts;
@@ -764,6 +823,8 @@ function step(ts){
 
   // auto-repeat horizontal/vertical uniquement si une pièce est active
   if(hasActive){
+  // Copilot: pilote la pièce vers le hint (uniquement Training et si hint courant existe)
+  try{ if(copilotOn && isTraining){ copilotDrive(); } }catch{}
     handleHorizontal(ts);
     // auto-repeat vertical (soft drop maintenu)
     handleVertical(ts);
@@ -775,6 +836,40 @@ function step(ts){
   // tenir la miniature adverse à jour en continu
   try{ if(oppMiniCtx){ drawOppMini(); } }catch{}
   requestAnimationFrame(step);
+}
+
+// Pilotage Copilot: applique rotations/déplacements pour rejoindre le hint.
+function copilotDrive(){
+  if(!easyMode || !hint || !active) return; // nécessite le hint
+  // Au changement de pièce (spawn/hold), opportunité de HOLD si la pièce en hold donnerait un meilleur score
+  if(_copilotLastSeq !== _pieceSeq){
+    _copilotLastSeq = _pieceSeq;
+    try{ copilotMaybeHold(); }catch{}
+  }
+  // Aligner l’orientation: calculer rot nécessaire
+  const base = TETROMINOS[active.key];
+  const eq = (a,b)=>{ for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(!!a[j][i] !== !!b[j][i]) return false; return true; };
+  let curIdx = 0; let rmat = base;
+  for(let k=0;k<4;k++){ if(eq(active.mat, rmat)){ curIdx = k; break; } rmat = rotateCW(rmat); }
+  const needRot = ((hint.rot - curIdx)%4 + 4) % 4;
+  if(needRot>0){ rotate(); return; }
+  // Déplacements horizontaux vers la colonne cible
+  const dx = hint.x - x;
+  if(dx<0){ move(-1); return; }
+  if(dx>0){ move(1); return; }
+  // Si aligné: descendre en douceur (laisser le lock gérer)
+  // Option: on peut soft drop pour accélérer
+  softDrop();
+}
+
+// Décide un HOLD automatique si l’échange donne un meilleur hint (heuristique simple)
+function copilotMaybeHold(){
+  if(!easyMode || !active) return;
+  // Approche simple: si pas de hint dispo pour la pièce actuelle mais disponible après HOLD (ou score nettement meilleur), déclencher HOLD
+  // On utilise des helpers s’ils existent; sinon on reste neutre. Ici, on se limite à « pas de hint courant ».
+  if(!hint){
+    try{ window.__performHold?.(); window.__hintOnHold?.(); }catch{}
+  }
 }
 
 function handleHorizontal(ts){
@@ -1053,6 +1148,14 @@ function drawNext(){
   // plus d'overlay next-mini (déplacé en sidebar native)
 }
 
+function drawHold(){
+  if(!holdCtx || !holdCvs) return;
+  try{
+    holdCtx.clearRect(0,0,holdCvs.width, holdCvs.height);
+    if(hold){ drawMiniPiece(holdCtx, holdCvs, hold); }
+  }catch{}
+}
+
 function drawMiniPiece(ctxMini, cvsMini, piece, sizeOverride){
   const m = piece.mat; const key = piece.key; const color = COLORS[key];
   let minX=4,maxX=0,minY=4,maxY=0;
@@ -1075,6 +1178,18 @@ function drawMiniPiece(ctxMini, cvsMini, piece, sizeOverride){
     ctxMini.stroke();
   }
 }
+
+// Clic sur l'aperçu NEXT: utiliser comme raccourci HOLD (solo/training uniquement)
+try{
+  if(nextCvs){
+    nextCvs.addEventListener('click', (e)=>{
+      if(!running || paused) return;
+      // Autoriser uniquement hors multi actif
+      if(roomId && (!mpStarted || !peerConnected)) return;
+      if(performHold()){ try{ window.__hintOnHold?.(); }catch{} }
+    });
+  }
+}catch{}
 
 function getLandingY(px, py, mat){
   let gy = py;
@@ -1114,29 +1229,36 @@ function drawLandingLine(row){
 }
 // Lignes verticales de projection (bords gauche/droite) du bas de la pièce jusqu'au bas du plateau
 function drawLandingVerticals(px, py, mat){
-  // Lignes partant de la pièce active (px,py) jusqu'au premier obstacle en dessous
-  const b = getPieceBounds(mat);
-  const colLeft = b.minX;
-  const colRight = b.maxX;
-  // Trouver la case la plus basse de la pièce pour chaque bord
-  let bottomJL = b.minY, bottomJR = b.minY;
-  for(let j=0;j<4;j++){ if(mat[j][colLeft]) bottomJL = j; }
-  for(let j=0;j<4;j++){ if(mat[j][colRight]) bottomJR = j; }
+  // Lignes partant des extrémités réelles (colonnes globale min/max) jusqu'au premier obstacle en dessous
+  let minCol = Infinity, maxCol = -Infinity;
+  const bottomsByCol = new Map(); // col -> bottomJ (max)
+  for(let j=0;j<4;j++){
+    for(let i=0;i<4;i++) if(mat[j][i]){
+      const gc = px + i; const gr = py + j;
+      if(gc < minCol) minCol = gc;
+      if(gc > maxCol) maxCol = gc;
+      const cur = bottomsByCol.get(gc);
+      if(cur==null || gr > cur) bottomsByCol.set(gc, gr);
+    }
+  }
+  if(!isFinite(minCol) || !isFinite(maxCol)) return;
+  const bottomL = bottomsByCol.get(minCol) ?? py; // row index
+  const bottomR = bottomsByCol.get(maxCol) ?? py;
   // Coordonnées X alignées sur les bords visibles des tuiles
-  const leftX = (px + colLeft) * TILE;           // bord gauche
-  const rightX = (px + colRight + 1) * TILE;     // bord droit
+  const leftX = (minCol) * TILE;           // bord gauche
+  const rightX = (maxCol + 1) * TILE;      // bord droit
   // Y de départ: bas de la case extrême de la pièce active
-  const startYL = (py + bottomJL + 1) * TILE;
-  const startYR = (py + bottomJR + 1) * TILE;
+  const startYL = (bottomL + 1) * TILE;
+  const startYR = (bottomR + 1) * TILE;
   // Chercher l'obstacle (sol ou bloc posé) sous chaque colonne bord
   const findStopY = (col, fromRow) => {
     let gy = fromRow; // row index juste sous le bas de la pièce
-    while(gy < ROWS && !grid[gy]?.[px + col]){ gy++; }
+    while(gy < ROWS && !grid[gy]?.[col]){ gy++; }
     // gy est soit ROWS (sol), soit la première ligne occupée
     return gy * TILE;
   };
-  const stopYL = findStopY(colLeft, py + bottomJL + 1);
-  const stopYR = findStopY(colRight, py + bottomJR + 1);
+  const stopYL = findStopY(minCol, bottomL + 1);
+  const stopYR = findStopY(maxCol, bottomR + 1);
   ctx.save();
   ctx.strokeStyle = 'rgba(125,211,252,0.45)';
   ctx.setLineDash([4,8]);
@@ -1211,6 +1333,66 @@ function drawHint(h){
     roundRect(ctx, pxl+2, pyl+2, TILE-4, TILE-4, 6);
     ctx.stroke();
   }
+  // Aide de navigation: nombre de rotations + direction horizontale
+  try{
+    // Réinitialiser l'opacité pour l'overlay d'indication (doit être lisible)
+    ctx.globalAlpha = 1;
+    // Déterminer l'orientation actuelle (0..3) en comparant la matrice active
+    const base = TETROMINOS[active.key];
+    const eq = (a,b)=>{ for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(!!a[j][i] !== !!b[j][i]) return false; return true; };
+    let curIdx = 0; let rmat = base;
+    for(let k=0;k<4;k++){ if(eq(active.mat, rmat)){ curIdx = k; break; } rmat = rotateCW(rmat); }
+    const needRot = ((h.rot - curIdx)%4 + 4) % 4;
+    const dx = (h.x - x);
+    // Dessiner un petit cartouche en haut du plateau
+    ctx.save();
+    ctx.globalAlpha = 0.9;
+  const label = `${needRot} rot${needRot>1?'s':''} · ${dx===0? '⋯': (dx>0? '→' : '←')}`;
+  const fs = 16;
+    ctx.font = `600 ${fs}px system-ui, Segoe UI, Arial`;
+    const padX=10, padY=6;
+  const mw = Math.ceil(ctx.measureText(label).width);
+  const bw = mw + padX*2, bh = fs + padY*2;
+  // placer le cartouche au-dessus de la pièce active
+  const bAct = getActiveBounds();
+  const bx = Math.max(4, Math.min(COLS*TILE - bw - 4, Math.floor(((bAct.l + bAct.r)/2) - bw/2)));
+  const by = Math.max(4, Math.floor(bAct.t) - bh - 8);
+  ctx.fillStyle = 'rgba(15,23,42,0.85)';
+    roundRect(ctx, bx, by, bw, bh, 8); ctx.fill();
+    ctx.strokeStyle = 'rgba(56,189,248,0.55)'; ctx.lineWidth=1; roundRect(ctx, bx, by, bw, bh, 8); ctx.stroke();
+    ctx.fillStyle = '#e6f3ff';
+    ctx.textBaseline='middle'; ctx.textAlign='center';
+    ctx.fillText(label, bx + bw/2, by + bh/2 + 0.5);
+    ctx.restore();
+  // Flèche directionnelle depuis le centre courant vers le centre de l'empreinte cible
+  const { cx } = getActiveCenterOfMass();
+  const matHint = rotateN(TETROMINOS[active.key], h.rot);
+  const bb = getPieceBounds(matHint);
+  // centre horizontal de l'empreinte à la position cible
+  const targetX = ((h.x + bb.minX + (bb.w/2)) * TILE);
+  const ay = 24; // hauteur de flèche sous le cartouche
+    const len = Math.max(0, Math.min(Math.abs(targetX - cx), COLS*TILE*0.45));
+    if(len > 8){
+      ctx.save();
+      ctx.translate(cx, by + bh + ay);
+  ctx.strokeStyle = 'rgba(56,189,248,0.9)';
+  ctx.lineWidth = 4;
+      ctx.beginPath();
+      if(targetX > cx){ ctx.moveTo(0,0); ctx.lineTo(len,0); }
+      else { ctx.moveTo(0,0); ctx.lineTo(-len,0); }
+      ctx.stroke();
+      // pointe
+      ctx.beginPath();
+      const dir = targetX > cx ? 1 : -1;
+      const tipX = dir * len;
+      ctx.moveTo(tipX,0);
+  ctx.lineTo(tipX - 10*dir, -6);
+      ctx.moveTo(tipX,0);
+  ctx.lineTo(tipX - 10*dir, 6);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }catch{}
   ctx.restore();
 }
 function getActiveBounds(){
@@ -1389,6 +1571,9 @@ function start(){
   }catch{}
   score = 0; level = 1; speedMs = START_SPEED_MS; lastSpeedup = 0; step.last = 0;
   selfDead = false; opponentDead = false; opponentActive = null;
+  // Reset HOLD
+  hold = null; holdUsed = false;
+  try{ drawHold(); }catch{}
   gameStartAt = performance.now();
   // Politique Boost (Easy):
   // - En solo: OFF par défaut à chaque nouvelle partie, sauf "Rejouer" (préservation 1 coup)
@@ -1415,6 +1600,7 @@ function start(){
   nextStartPreserveEasy = false;
   // Easy reste OFF par défaut (sauf si "Rejouer" demande la préservation via nextStartPreserveEasy)
   resetGrid(); nextQueue = []; bag = [];
+  try{ drawHold(); }catch{}
   // préparer l’aperçu mais ne pas afficher d’actif si en multi avant start
   if(roomId){
     // remplir la file d’attente pour le preview
@@ -1442,6 +1628,8 @@ function resetIdleView(){
   if(mpStarted) return;
   running = false; paused = false; fx.stopMusic();
   selfDead = false; opponentDead = false; opponentActive = null;
+  hold = null; holdUsed = false;
+  try{ drawHold(); }catch{}
   // solo: RNG standard
   if(!roomId){ rng = Math.random; }
   // scores visibles
@@ -1449,6 +1637,7 @@ function resetIdleView(){
   // grilles vides et previews reset
   resetGrid(); opponentGrid = Array.from({length:ROWS},()=>Array(COLS).fill(null));
   nextQueue = []; bag = [];
+  try{ drawHold(); }catch{}
   // donner une pièce d'aperçu pour affichage neutre
   spawn();
   // FX/overlays
@@ -1493,6 +1682,9 @@ window.addEventListener('keydown', (e)=>{
       lastArrowDownTs = now; vHeld = true; vLastMove = now; softDrop(); break;
     }
     case 'Space': hardDrop(); break;
+  case 'KeyC': { performHold(); try{ window.__hintOnHold?.(); }catch{} break; }
+  case 'ShiftLeft':
+  case 'ShiftRight': { performHold(); try{ window.__hintOnHold?.(); }catch{} break; }
     case 'KeyP': togglePause(); break;
   }
 });
@@ -1799,6 +1991,7 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
   renderTop10();
   // Toggle Mode Easy via bouton (plus de checkbox)
   const easyBtn = document.getElementById('easy-btn');
+  const copilotBtn = document.getElementById('btn-copilot');
   const aiDD = document.getElementById('ai-dd');
   const aiPowerBtn = document.getElementById('ai-power-btn');
   const aiPowerDD = document.getElementById('ai-power-dd');
@@ -1857,13 +2050,13 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
       // mettre à jour les checks
       aiDD.querySelectorAll('.ai-opt').forEach(b=> b.setAttribute('aria-checked', b===btn ? 'true' : 'false'));
       if(val==='off'){
-        if(easyMode){ easyMode=false; syncEasy(); hint=null; }
+  if(easyMode){ easyMode=false; syncEasy(); hint=null; }
       } else {
         const newProfile = val || 'equilibre';
         const profileChanged = (newProfile !== aiProfile);
         aiProfile = newProfile;
-        if(!easyMode){ easyMode = true; syncEasy(); computeHint(); }
-        else if(profileChanged){ syncEasy(); computeHint(); }
+  if(!easyMode){ easyMode = true; syncEasy(); computeHint(); }
+  else if(profileChanged){ syncEasy(); computeHint(); }
       }
       ddOpen=false; closeDD();
     });
@@ -1902,6 +2095,23 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
   window.addEventListener('scroll', repositionIfOpen, { passive:true });
   if(window.visualViewport){ window.visualViewport.addEventListener('resize', repositionIfOpen); window.visualViewport.addEventListener('scroll', repositionIfOpen); }
   }
+  // Copilot button wiring (Training only visibility handled below)
+  if(copilotBtn){
+    copilotBtn.addEventListener('click', ()=>{
+      copilotOn = !copilotOn;
+      copilotBtn.setAttribute('aria-pressed', copilotOn ? 'true' : 'false');
+      copilotBtn.classList.toggle('active', copilotOn);
+    });
+  }
+  // Helper: visibilité du bouton Copilot
+  window.__updateCopilotVisible = (show)=>{
+    try{
+      const cop = document.getElementById('btn-copilot');
+      if(!cop) return;
+      if(show){ cop.classList.remove('hidden'); }
+      else { cop.classList.add('hidden'); cop.classList.remove('active'); cop.setAttribute('aria-pressed','false'); copilotOn=false; }
+    }catch{}
+  };
   // Bouton IA (Training only): visible après le bouton Nouvelle partie
   if(aiPowerBtn && aiPowerDD){
     // Masqué par défaut, visible en Training uniquement via helper
@@ -1927,31 +2137,56 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
     aiPowerBtn.addEventListener('click', (e)=>{ e.stopPropagation(); dd2Open=!dd2Open; if(dd2Open) openDD2(); else closeDD2(); });
     document.addEventListener('click', (e)=>{ if(aiPowerDD.classList.contains('hidden')) return; if(!aiPowerDD.contains(e.target) && e.target!==aiPowerBtn){ dd2Open=false; closeDD2(); } });
     document.addEventListener('keydown', (e)=>{ if(e.key==='Escape'){ dd2Open=false; closeDD2(); }});
+    // Synchro Copilot (menu): garder le toggle désactivé si IA=OFF; ne pas masquer le bouton topbar
+    const syncCopilotVisibility = ()=>{
+      const on = !!easyMode && !!aiProfile && aiProfile !== 'off';
+      try{ const t = document.getElementById('ai-copilot-toggle'); if(t){ t.disabled = !on; t.classList.toggle('disabled', !on); } }catch{}
+    };
     // Sélection d'option (reutilise easyMode/aiProfile + computeHint)
     aiPowerDD.addEventListener('click', (ev)=>{
       const btn = ev.target && ev.target.closest('.ai-opt'); if(!btn) return;
       const val = btn.getAttribute('data-value');
       aiPowerDD.querySelectorAll('.ai-opt').forEach(b=> b.setAttribute('aria-checked', b===btn ? 'true' : 'false'));
-      if(val==='off'){ easyMode=false; hint=null; try{ window.__syncEasyTrainingUI?.(); }catch{} }
+      if(val==='off'){ easyMode=false; hint=null; try{ window.__syncEasyTrainingUI?.(); }catch{} syncCopilotVisibility(); }
       else {
         aiProfile = val||'equilibre';
         easyMode = true;
         try{ computeHint(); }catch{}
         try{ window.__syncEasyTrainingUI?.(); }catch{}
+        syncCopilotVisibility();
       }
       dd2Open=false; closeDD2();
     });
     // Helper pour visibilité Training-only
     window.__updateAIPowerVisible = (show)=>{ try{ aiPowerBtn.classList.toggle('hidden', !show); if(!show) closeDD2(); }catch{} };
+    // Toggle Copilot dans le menu IA Training
+    try{
+      const aiCopilotToggle = document.getElementById('ai-copilot-toggle');
+      if(aiCopilotToggle){
+        aiCopilotToggle.addEventListener('click', (e)=>{
+          e.stopPropagation();
+          const iaOn = !!easyMode && aiProfile !== 'off';
+          if(!iaOn){ return; }
+          copilotOn = !copilotOn;
+          aiCopilotToggle.setAttribute('aria-checked', copilotOn ? 'true':'false');
+          const btn = document.getElementById('btn-copilot');
+          if(btn){ btn.setAttribute('aria-pressed', copilotOn ? 'true':'false'); btn.classList.toggle('active', copilotOn); }
+        });
+      }
+    }catch{}
+    // Initial visibility
+    syncCopilotVisibility();
   }
   // Navigation écrans
-  if(btnStartSolo){ btnStartSolo.addEventListener('click', (e)=>{ try{ e.stopPropagation(); }catch{} isTraining=false; nextStartPreserveEasy = false; try{ window.__updateEasyVisible?.(false); window.__updateAIPowerVisible?.(false); }catch{} easyMode=false; showGame(); start(); }); }
-  if(btnStartMulti){ btnStartMulti.addEventListener('click', (e)=>{ try{ e.stopPropagation(); }catch{} isTraining=false; try{ window.__updateEasyVisible?.(false); window.__updateAIPowerVisible?.(false); }catch{} easyMode=false; showJoin(); }); }
+  if(btnStartSolo){ btnStartSolo.addEventListener('click', (e)=>{ try{ e.stopPropagation(); }catch{} isTraining=false; nextStartPreserveEasy = false; try{ window.__updateEasyVisible?.(false); window.__updateAIPowerVisible?.(false); window.__updateCopilotVisible?.(false); }catch{} easyMode=false; showGame(); start(); }); }
+  if(btnStartMulti){ btnStartMulti.addEventListener('click', (e)=>{ try{ e.stopPropagation(); }catch{} isTraining=false; try{ window.__updateEasyVisible?.(false); window.__updateAIPowerVisible?.(false); window.__updateCopilotVisible?.(false); }catch{} easyMode=false; showJoin(); }); }
   const onTrainingStart = (e)=>{ try{ e?.stopPropagation?.(); }catch{} isTraining=true; nextStartPreserveEasy = true; easyMode = true; if(!aiProfile) aiProfile='equilibre';
     // Sync visuel du bouton Easy et du menu
     try{
   window.__syncEasyTrainingUI?.();
   window.__updateAIPowerVisible?.(true);
+  // Visibilité Copilot: toujours visible en Training
+  try{ window.__updateCopilotVisible?.(true); }catch{}
     }catch{}
     showGame(); start(); try{ computeHint(); }catch{} };
   if(btnStartTraining){ btnStartTraining.addEventListener('click', onTrainingStart); }
@@ -1971,7 +2206,7 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
         if(!btn) return;
   if(btn.id === 'btn-start-solo'){ isTraining=false; nextStartPreserveEasy = false; try{ window.__updateEasyVisible?.(false); }catch{} easyMode=false; showGame(); start(); }
   else if(btn.id === 'btn-start-multi'){ isTraining=false; try{ window.__updateEasyVisible?.(false); }catch{} easyMode=false; showJoin(); }
-  else if(btn.id === 'btn-start-training' || btn.id === 'btn-training'){ isTraining=true; nextStartPreserveEasy = true; easyMode = true; if(!aiProfile) aiProfile='equilibre'; try{ window.__syncEasyTrainingUI?.(); window.__updateAIPowerVisible?.(true); }catch{} showGame(); start(); try{ computeHint(); }catch{} }
+  else if(btn.id === 'btn-start-training' || btn.id === 'btn-training'){ isTraining=true; nextStartPreserveEasy = true; easyMode = true; if(!aiProfile) aiProfile='equilibre'; try{ window.__syncEasyTrainingUI?.(); window.__updateAIPowerVisible?.(true); window.__updateCopilotVisible?.(true); }catch{} showGame(); start(); try{ computeHint(); }catch{} }
     // ne pas relayer btn-hero-top10 ici pour éviter un double déclenchement
       });
     }
@@ -3642,6 +3877,8 @@ function rotateN(mat, n){
 
 function computeHint(){
   if(!easyMode || !active){ hint = null; return; }
+  // Autoriser seulement au spawn (même si profile/toggle change en cours de chute)
+  if(_lastHintSeq === _pieceSeq){ return; }
   const pieceKey = active.key;
   let best = null;
   let bestNonClear = null; // meilleure position qui ne clear pas (0 lignes)
@@ -3782,8 +4019,8 @@ function computeHint(){
     if(best.score - bestNonClear.score <= margin){ hint = bestNonClear; return; }
   }
   // Choisir systématiquement le meilleur avec le moins de nouveaux trous si dispo
-  if(bestMinHoleCand){ hint = bestMinHoleCand; return; }
-  if(best){ hint = best; return; }
+  if(bestMinHoleCand){ hint = bestMinHoleCand; _lastHintSeq = _pieceSeq; return; }
+  if(best){ hint = best; _lastHintSeq = _pieceSeq; return; }
   // Fallback robuste: aucune proposition n'a été trouvée (rare). Chercher un drop sûr proche de la position actuelle.
   try{
     const tryFallback = ()=>{
@@ -3805,9 +4042,25 @@ function computeHint(){
       }
       return false;
     };
-    if(!tryFallback()) hint = null;
+  if(!tryFallback()) hint = null; else _lastHintSeq = _pieceSeq;
   }catch{ hint = null; }
 }
+
+// Hook public à appeler lorsqu’un HOLD échange la pièce active
+// Politique: considérer le swap comme une « nouvelle pièce » pour le hint,
+// donc on incrémente la séquence et on recalcule uniquement si Easy est ON.
+function recomputeHintOnHold(){
+  try{
+    if(!easyMode || !active) return;
+    _pieceSeq++;
+    _lastHintSeq = -1;
+    hint = null;
+    computeHint();
+    try{ draw(); }catch{}
+  }catch{}
+}
+// Exposer pour un éventuel gestionnaire HOLD (clavier ou clic sur NEXT)
+try{ window.__hintOnHold = recomputeHintOnHold; }catch{}
 
 function placeOn(sim, px, py, mat, key){
   for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(mat[j][i]){

@@ -302,7 +302,7 @@ export class BaseGameScreen {
     try{
       if(this.objectives?.check?.()){
         // Fin de partie (victoire)
-  this.toast('GG!', { color:'#facc15', size:26, dur:1.6 });
+  // Plus de toast « GG! » (demande UX)
   if(this.autoExitOnWin){ setTimeout(()=> this.navigateHome(), 900); }
         return true;
       }

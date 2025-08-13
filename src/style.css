@@ -288,6 +288,11 @@ body.game-open{overflow-x:hidden}
 .ai-dd .ai-opt .ai-ico{width:18px; display:inline-flex; justify-content:center}
 .ai-dd .ai-opt .ai-lab{flex:1}
 .ai-dd .ai-opt[aria-checked="true"]{background:linear-gradient(180deg,#1e232b,#151920); border-color:#2a2f37; box-shadow:inset 0 0 0 1px rgba(56,189,248,.12)}
+.ai-dd .ai-opt.disabled,
+.ai-dd .ai-opt[disabled]{
+  opacity:.5; filter:grayscale(.2) brightness(.9);
+  cursor:not-allowed; pointer-events:none;
+}
 .ai-dd .ai-opt:hover,
 .ai-dd .ai-opt:focus-visible{border-color:#3a9bd9; color:#fff; background:linear-gradient(180deg, rgba(14,165,233,.18), rgba(14,165,233,.08)); box-shadow:0 0 0 3px rgba(56,189,248,.16)}
 /* Mobile: augmenter la cible tactile */

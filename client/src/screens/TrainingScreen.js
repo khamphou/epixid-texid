@@ -16,6 +16,11 @@ export class TrainingScreen extends SoloScreen {
   this._hintUseHold = false; // recommander HOLD ?
   this._holdBlinkT = 0; // timer clignotement HOLD
   this._helpInjectedEl = null; // bloc d'aide Training
+  // Copilot
+  this.copilotOn = false;
+  this._copilotHeldForKey = null; // éviter HOLD en boucle pour une même pièce
+  this._copilotMoveAcc = 0; // cadence des mouvements horizontaux/rotations
+  this._copilotDropAcc = 0; // cadence de soft drop
     // UI handlers
     this._ui = { btn:null, dd:null, ddOpen:false, onClick:null, onDocClick:null };
   }
@@ -106,6 +111,16 @@ export class TrainingScreen extends SoloScreen {
         this._ui = { btn, dd, ddOpen:false, onClick, onDocClick:onDoc };
       }
     }catch{}
+    // Bouton Copilot (toujours visible en Training, indépendamment du mode IA)
+    try{
+      const copBtn = document.getElementById('btn-copilot');
+      if(copBtn){
+        copBtn.classList.remove('hidden');
+        const sync = ()=>{ copBtn.setAttribute('aria-pressed', this.copilotOn? 'true':'false'); copBtn.classList.toggle('active', !!this.copilotOn); };
+        copBtn.addEventListener('click', ()=>{ this.copilotOn = !this.copilotOn; this._copilotHeldForKey = null; sync(); });
+        sync();
+      }
+    }catch{}
     // Aide spécifique Training (uniquement sur cet écran)
     try{
       const dlg = document.getElementById('dlg-help');
@@ -141,6 +156,11 @@ export class TrainingScreen extends SoloScreen {
         btn.classList.add('hidden');
       }
       if(dd){ dd.classList.add('hidden'); }
+      // Masquer le bouton Copilot hors Training
+      try{
+        const copBtn = document.getElementById('btn-copilot');
+        if(copBtn){ copBtn.setAttribute('aria-pressed','false'); copBtn.classList.remove('active'); copBtn.classList.add('hidden'); }
+      }catch{}
     }catch{}
     super.dispose();
   }
@@ -170,6 +190,8 @@ export class TrainingScreen extends SoloScreen {
     } else {
   this._hint = null; this._hintForKey = null; this._hintUseHold = false; this._holdBlinkT = 0; this._holdToastShown = false;
     }
+    // Copilot: conduire la pièce si activé (indépendant d'easyMode pour l'affichage du bouton, mais nécessite un hint)
+    if(this.copilotOn && this.active){ this._copilotUpdate(dt); }
   }
 
   render(ctx){
@@ -177,7 +199,7 @@ export class TrainingScreen extends SoloScreen {
     if(!this.easyMode || !this._hint || !this.active) return;
     const br = this.getBoardRect();
     const { x:bx, y:by, cell } = br;
-    const useKey = this._hintKey || this.active.key;
+  const useKey = this._hintKey || this.active.key;
   const mat = rotateN(TETROMINOS[useKey], this._hint.rot);
     const t = (performance.now()%1000)/1000; const pulse = 0.45 + 0.45*Math.abs(Math.sin(t*Math.PI*2));
     ctx.save();
@@ -197,7 +219,8 @@ export class TrainingScreen extends SoloScreen {
     // Lignes de projection depuis la pièce active (position actuelle) vers le bas (côtés extrêmes)
     try{
       const sim = this._asSim();
-      const curMat = rotateN(TETROMINOS[this.active.key], this.rot);
+      // Utiliser la matrice actuelle de la pièce (le client ne stocke pas this.rot)
+      const curMat = this.active?.mat || rotateN(TETROMINOS[this.active.key], 0);
       let minGX=Infinity, maxGX=-Infinity; const lowestByCol = new Map();
       for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(curMat[j][i]){
         const gx = (this.x|0) + i; const gy = (Math.floor(this.y)) + j;
@@ -257,7 +280,29 @@ export class TrainingScreen extends SoloScreen {
       roundRect(ctx, this._holdPanel.x+2, this._holdPanel.y+2, this._holdPanel.w-4, this._holdPanel.h-4, 10);
       ctx.stroke();
       ctx.restore();
-    }
+  }
+    // Cartouche d'aide: nb de rotations + direction
+    try{
+      const curRot = detectRotIndex(this.active.key, this.active.mat);
+      const wantRot = ((this._hint.rot|0)+4)%4;
+      const cwDist = (wantRot - curRot + 4) % 4;
+      const ccwDist = (curRot - wantRot + 4) % 4;
+      const rotCount = Math.min(cwDist, ccwDist);
+      const dx = Math.sign((this._hint.x|0) - (this.x|0));
+      const arrow = dx<0? '←' : dx>0? '→' : '⇵';
+      const label = `${rotCount} rot · ${arrow}`;
+      ctx.save();
+      ctx.font='bold 12px system-ui,Segoe UI,Roboto';
+      const pad=6; const tw = Math.ceil(ctx.measureText(label).width)+pad*2; const th=22;
+      const rx = Math.max(8, Math.min(bx + 8, ctx.canvas.width - tw - 8));
+      const ry = Math.max(8, by - th - 6);
+      ctx.fillStyle='rgba(2,6,23,0.85)';
+      roundRect(ctx, rx, ry, tw, th, 8); ctx.fill();
+      ctx.strokeStyle='rgba(56,189,248,0.35)'; ctx.lineWidth=1; roundRect(ctx, rx, ry, tw, th, 8); ctx.stroke();
+      ctx.fillStyle='#e5f2ff'; ctx.textAlign='left'; ctx.textBaseline='middle';
+      ctx.fillText(label, rx+pad, ry+th/2);
+      ctx.restore();
+    }catch{}
   }
 
   // ---- IA Easy (portée depuis legacy/src/main.js) ----
@@ -280,14 +325,12 @@ export class TrainingScreen extends SoloScreen {
   }
   // Forcer recalcul immédiat des lignes de projection après rotation
   onRotate(){
-    // Effectuer la rotation réelle puis rafraîchir les guides/hints
-    try{ super.onRotate(); }catch{}
-    this._forceHintRecompute();
+  // En Training: rotation standard, pas de recalcul de hint ici (les projections sont recalculées en render)
+  try{ super.onRotate(); }catch{}
   }
   // Idem pour les rotations anti-horaires
   onRotateCCW(){
-    try{ super.onRotateCCW?.(); }catch{}
-    this._forceHintRecompute();
+  try{ super.onRotateCCW?.(); }catch{}
   }
   _stateChanged(s){ const p=this._lastState; const changed = !p || s.x!==p.x || s.y!==p.y || s.rot!==p.rot || s.gridHash!==p.gridHash || s.key!==p.key || s.next0!==p.next0 || s.next1!==p.next1; this._lastState = s; return changed; }
 
@@ -428,7 +471,7 @@ export class TrainingScreen extends SoloScreen {
     }
     // Fallback robuste: si aucun hint sélectionné, proposer un drop sûr pour la pièce active (meilleur atterrissage accessible)
     if(!this._hint && this.active){
-      const mat0 = rotateN(TETROMINOS[pieceKey], this.rot|0);
+      const mat0 = this.active?.mat || rotateN(TETROMINOS[pieceKey], 0);
       // Essayer à partir de la position courante puis étendre gauche/droite
       const tryXs = [];
       const cx = this.x|0; for(let d=0; d<=this.grid.w; d++){ const L=cx-d, R=cx+d; if(L>=0 && !tryXs.includes(L)) tryXs.push(L); if(R< this.grid.w && !tryXs.includes(R)) tryXs.push(R); if(tryXs.length>=this.grid.w) break; }
@@ -438,7 +481,8 @@ export class TrainingScreen extends SoloScreen {
         if(collideGrid(simNow, COLS, ROWS, px, Math.floor(this.y), mat0)) continue;
         let py = -2; while(!collideGrid(simNow, COLS, ROWS, px, py+1, mat0)) py++;
         if(py<-3) continue;
-        this._hint = { x:px, rot:(this.rot|0), yLanding:py, score:0, cleared:0, newHoles:0 };
+        const curRot = detectRotIndex(pieceKey, mat0);
+        this._hint = { x:px, rot:curRot, yLanding:py, score:0, cleared:0, newHoles:0 };
         this._hintKey = pieceKey;
         break;
       }
@@ -450,11 +494,61 @@ export class TrainingScreen extends SoloScreen {
     const sim = Array.from({length:ROWS}, (_,r)=> Array.from({length:COLS}, (__,c)=> this.grid.cells[r][c] ? 1 : 0));
     return sim;
   }
+
+  // --- Copilot (conduit vers l'indice courant + HOLD si bénéfique) ---
+  _copilotUpdate(dt){
+    if(this._countdown || !this.active) return;
+    // HOLD opportuniste si recommandé par l'indice courant
+    if(this._hint && this._hintUseHold && !this.holdUsed){
+      const curKey = this.active?.key || null;
+      if(this._copilotHeldForKey !== curKey && this.rules?.inputs?.allowHold){
+        try{ this.onHold(); }catch{}
+        this._copilotHeldForKey = curKey; // ne pas enchaîner plusieurs HOLD pour la même pièce
+        return; // laisser l'update suivant recalculer l'indice
+      }
+    }
+    // Conduite vers la cible
+    const target = this._hint; if(!target) return;
+    const wantRot = ((target.rot|0) + 4) % 4;
+    const curRot = ((this.rot|0) + 4) % 4;
+    // Cadence des actions (simple throttling pour lisser)
+    this._copilotMoveAcc += dt; this._copilotDropAcc += dt;
+    const canAct = this._copilotMoveAcc >= 0.035; // ~28 Hz
+    const canDrop = this._copilotDropAcc >= 0.02; // ~50 Hz soft
+    if(canAct){
+      this._copilotMoveAcc = 0;
+      // D'abord s'orienter
+      if(curRot !== wantRot){
+        // Choisir le sens le plus court (assume CW/CCW disponibles)
+        const cwDist = (wantRot - curRot + 4) % 4;
+        const ccwDist = (curRot - wantRot + 4) % 4;
+        if(cwDist <= ccwDist) this.onRotate(); else this.onRotateCCW?.();
+        return; // une action par tick de move
+      }
+      // Puis alignement horizontal
+      const dx = Math.sign((target.x|0) - (this.x|0));
+      if(dx !== 0){ this.onMove(dx); return; }
+      // Aligné: on peut hard drop
+      this.onHardDrop();
+      return;
+    }
+    if(canDrop){
+      this._copilotDropAcc = 0;
+      // Mouvement vertical doux pendant la conduite
+      this.onSoftDropTick(0.02);
+    }
+  }
 }
 
 // ---- Helpers IA (simu grille bool/entier) ----
 function rotateN(mat, n){ let r = mat; const k=(n%4+4)%4; for(let i=0;i<k;i++){ r = rotCW(r); } return r; }
 function rotCW(m){ const n=4; const r=Array.from({length:n},()=>Array(n).fill(0)); for(let j=0;j<n;j++) for(let i=0;i<n;i++) r[i][n-1-j]=m[j][i]; return r; }
+function matsEqual(a,b){ for(let j=0;j<4;j++){ for(let i=0;i<4;i++){ if(!!a[j][i] !== !!b[j][i]) return false; } } return true; }
+function detectRotIndex(key, currentMat){
+  const base = TETROMINOS[key];
+  for(let r=0;r<4;r++){ const m = rotateN(base, r); if(matsEqual(m, currentMat)) return r; }
+  return 0;
+}
 function collideGrid(sim, COLS, ROWS, px, py, mat){
   for(let j=0;j<4;j++){
     for(let i=0;i<4;i++){

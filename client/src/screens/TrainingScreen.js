@@ -18,9 +18,13 @@ export class TrainingScreen extends SoloScreen {
   this._helpInjectedEl = null; // bloc d'aide Training
   // Copilot
   this.copilotOn = false;
-  this._copilotHeldForKey = null; // éviter HOLD en boucle pour une même pièce
-  this._copilotMoveAcc = 0; // cadence des mouvements horizontaux/rotations
-  this._copilotDropAcc = 0; // cadence de soft drop
+  this._copilotHeldForKey = null; // éviter HOLD en boucle pour une même pièce (si on change de stratégie)
+  this._copilotLastSeqKey = null; // clé de pièce pour déclencher actions spawn/hold une fois par pièce
+  // Cooldowns d'actions Copilot (rythme humain proche des DAS/ARR)
+  this._copilotCdMs = 35; // rotation/déplacement
+  this._copilotDropCdMs = 28; // soft drop
+  this._copilotLastAct = 0;
+  this._copilotLastDrop = 0;
     // UI handlers
     this._ui = { btn:null, dd:null, ddOpen:false, onClick:null, onDocClick:null };
   }
@@ -94,6 +98,7 @@ export class TrainingScreen extends SoloScreen {
               this.easyMode=false; this._hint=null; btn.setAttribute('aria-pressed','false'); btn.classList.remove('active'); this._syncEasyClasses();
               try{ localStorage.setItem('texid_ai_profile','off'); }catch{}
               dd.querySelectorAll('.ai-opt').forEach(b=> b.setAttribute('aria-checked', b.dataset.value==='off' ? 'true':'false'));
+              try{ const copBtn=document.getElementById('btn-copilot'); if(copBtn){ copBtn.classList.add('hidden'); copBtn.setAttribute('aria-pressed','false'); copBtn.classList.remove('active'); this.copilotOn=false; } }catch{}
               closeDD();
               return;
             }
@@ -105,20 +110,26 @@ export class TrainingScreen extends SoloScreen {
             try{ localStorage.setItem('texid_ai_profile', v); }catch{}
             dd.querySelectorAll('.ai-opt').forEach(b=> b.setAttribute('aria-checked', b.dataset.value===v ? 'true':'false'));
             if(changed) this._forceHintRecompute();
+            // IA activée -> afficher Copilot bouton
+            try{ const copBtn=document.getElementById('btn-copilot'); if(copBtn){ copBtn.classList.remove('hidden'); } }catch{}
             closeDD();
           });
         });
         this._ui = { btn, dd, ddOpen:false, onClick, onDocClick:onDoc };
       }
     }catch{}
-    // Bouton Copilot (toujours visible en Training, indépendamment du mode IA)
+    // Bouton Copilot (visible en Training seulement ET si IA ≠ Off)
     try{
       const copBtn = document.getElementById('btn-copilot');
       if(copBtn){
-        copBtn.classList.remove('hidden');
-        const sync = ()=>{ copBtn.setAttribute('aria-pressed', this.copilotOn? 'true':'false'); copBtn.classList.toggle('active', !!this.copilotOn); };
-        copBtn.addEventListener('click', ()=>{ this.copilotOn = !this.copilotOn; this._copilotHeldForKey = null; sync(); });
-        sync();
+        const syncVisible = ()=>{
+          const iaOn = !!this.easyMode;
+          copBtn.classList.toggle('hidden', !iaOn);
+        };
+        const syncState = ()=>{ copBtn.setAttribute('aria-pressed', this.copilotOn? 'true':'false'); copBtn.classList.toggle('active', !!this.copilotOn); };
+        copBtn.addEventListener('click', ()=>{ this.copilotOn = !this.copilotOn; this._copilotHeldForKey = null; syncState(); });
+        syncVisible();
+        syncState();
       }
     }catch{}
     // Aide spécifique Training (uniquement sur cet écran)
@@ -157,10 +168,7 @@ export class TrainingScreen extends SoloScreen {
       }
       if(dd){ dd.classList.add('hidden'); }
       // Masquer le bouton Copilot hors Training
-      try{
-        const copBtn = document.getElementById('btn-copilot');
-        if(copBtn){ copBtn.setAttribute('aria-pressed','false'); copBtn.classList.remove('active'); copBtn.classList.add('hidden'); }
-      }catch{}
+  try{ const copBtn = document.getElementById('btn-copilot'); if(copBtn){ copBtn.setAttribute('aria-pressed','false'); copBtn.classList.remove('active'); copBtn.classList.add('hidden'); } }catch{}
     }catch{}
     super.dispose();
   }
@@ -190,8 +198,8 @@ export class TrainingScreen extends SoloScreen {
     } else {
   this._hint = null; this._hintForKey = null; this._hintUseHold = false; this._holdBlinkT = 0; this._holdToastShown = false;
     }
-    // Copilot: conduire la pièce si activé (indépendant d'easyMode pour l'affichage du bouton, mais nécessite un hint)
-    if(this.copilotOn && this.active){ this._copilotUpdate(dt); }
+  // Copilot: conduire la pièce si activé (reprend la logique /src)
+  if(this.copilotOn && this.active){ this._copilotUpdate(dt); }
   }
 
   render(ctx){
@@ -281,26 +289,64 @@ export class TrainingScreen extends SoloScreen {
       ctx.stroke();
       ctx.restore();
   }
-    // Cartouche d'aide: nb de rotations + direction
+    // Cartouche d'aide: nb de rotations + direction — affichée au-dessus de la pièce qui descend
     try{
       const curRot = detectRotIndex(this.active.key, this.active.mat);
       const wantRot = ((this._hint.rot|0)+4)%4;
-      const cwDist = (wantRot - curRot + 4) % 4;
-      const ccwDist = (curRot - wantRot + 4) % 4;
-      const rotCount = Math.min(cwDist, ccwDist);
+  const cwDist = (wantRot - curRot + 4) % 4;
+  const ccwDist = (curRot - wantRot + 4) % 4;
+  // Utiliser le nombre d'appuis en rotation horaire (↑) pour rejoindre l'orientation cible
+  const rotCount = cwDist;
       const dx = Math.sign((this._hint.x|0) - (this.x|0));
-      const arrow = dx<0? '←' : dx>0? '→' : '⇵';
-      const label = `${rotCount} rot · ${arrow}`;
+      const arrowChar = dx<0? '←' : dx>0? '→' : '⇵';
+
+      // Mesure séparée: texte (petit) + flèche (plus grande)
+  const textFont = 'bold 12px system-ui,Segoe UI,Roboto';
+  const arrowFont = '800 22px system-ui,Segoe UI,Roboto';
+      const pad = 6, gap = 8;
       ctx.save();
-      ctx.font='bold 12px system-ui,Segoe UI,Roboto';
-      const pad=6; const tw = Math.ceil(ctx.measureText(label).width)+pad*2; const th=22;
-      const rx = Math.max(8, Math.min(bx + 8, ctx.canvas.width - tw - 8));
-      const ry = Math.max(8, by - th - 6);
+      ctx.font = textFont;
+      const textLabel = `${rotCount} rot ·`;
+      const textW = Math.ceil(ctx.measureText(textLabel).width);
+      ctx.font = arrowFont;
+      const arrowW = Math.ceil(ctx.measureText(arrowChar).width);
+  const th = 28; // un peu plus haut pour la flèche agrandie
+      const tw = pad*2 + textW + gap + arrowW;
+
+      // Boîte englobante de la pièce active en coordonnées grille
+      const x0 = this.x|0; const y0 = Math.floor(this.y); const amat = this.active.mat;
+      let minGX=Infinity, maxGX=-Infinity, minGY=Infinity;
+      for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(amat[j][i]){ const gx=x0+i, gy=y0+j; if(gx<minGX) minGX=gx; if(gx>maxGX) maxGX=gx; if(gy<minGY) minGY=gy; }
+      // Centre horizontal de la pièce
+      const cx = bx + ((minGX + maxGX + 1)/2) * cell;
+      // Position au-dessus du haut de la pièce (même si elle est partiellement hors du plateau)
+      const topY = by + (minGY * cell);
+      let rx = Math.round(cx - tw/2);
+      let ry = Math.round(topY - th - 8);
+      // Clamps pour rester dans la zone du plateau
+      const minX = bx + 4, maxX = bx + this.grid.w*cell - tw - 4;
+      rx = Math.max(minX, Math.min(maxX, rx));
+      ry = Math.max(8, ry);
+
+      // Fond + contour
       ctx.fillStyle='rgba(2,6,23,0.85)';
       roundRect(ctx, rx, ry, tw, th, 8); ctx.fill();
       ctx.strokeStyle='rgba(56,189,248,0.35)'; ctx.lineWidth=1; roundRect(ctx, rx, ry, tw, th, 8); ctx.stroke();
-      ctx.fillStyle='#e5f2ff'; ctx.textAlign='left'; ctx.textBaseline='middle';
-      ctx.fillText(label, rx+pad, ry+th/2);
+
+      // Texte (rotations)
+      ctx.textAlign='left'; ctx.textBaseline='middle';
+      ctx.font = textFont; ctx.fillStyle='#e5f2ff';
+      const textX = rx + pad; const cy = ry + th/2;
+      ctx.fillText(textLabel, textX, cy);
+
+      // Flèche plus grande + léger contour pour visibilité
+      const arrowX = textX + textW + gap;
+      ctx.font = arrowFont; ctx.fillStyle='#ffffff';
+      // Stroke pour renforcer le contraste
+  ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.95)';
+      ctx.strokeText(arrowChar, arrowX, cy + 0.5);
+      ctx.fillText(arrowChar, arrowX, cy);
+
       ctx.restore();
     }catch{}
   }
@@ -496,47 +542,51 @@ export class TrainingScreen extends SoloScreen {
   }
 
   // --- Copilot (conduit vers l'indice courant + HOLD si bénéfique) ---
-  _copilotUpdate(dt){
+  _copilotUpdate(_dt){
     if(this._countdown || !this.active) return;
-    // HOLD opportuniste si recommandé par l'indice courant
-    if(this._hint && this._hintUseHold && !this.holdUsed){
+    // Exiger IA (easyMode) + hint + pièce active comme dans /src
+    if(!this.easyMode) return;
+    // HOLD immédiat si l'indice le recommande et que HOLD est autorisé/non consommé
+    if(this._hint && this._hintUseHold && this.rules?.inputs?.allowHold && !this.holdUsed){
       const curKey = this.active?.key || null;
-      if(this._copilotHeldForKey !== curKey && this.rules?.inputs?.allowHold){
-        try{ this.onHold(); }catch{}
-        this._copilotHeldForKey = curKey; // ne pas enchaîner plusieurs HOLD pour la même pièce
-        return; // laisser l'update suivant recalculer l'indice
+      if(this._copilotHeldForKey !== curKey){
+        this.onHold();
+        this._copilotHeldForKey = curKey;
+        return; // laisser l'update suivant recalculer l'indice sur la nouvelle pièce
       }
     }
-    // Conduite vers la cible
-    const target = this._hint; if(!target) return;
-    const wantRot = ((target.rot|0) + 4) % 4;
-    const curRot = ((this.rot|0) + 4) % 4;
-    // Cadence des actions (simple throttling pour lisser)
-    this._copilotMoveAcc += dt; this._copilotDropAcc += dt;
-    const canAct = this._copilotMoveAcc >= 0.035; // ~28 Hz
-    const canDrop = this._copilotDropAcc >= 0.02; // ~50 Hz soft
-    if(canAct){
-      this._copilotMoveAcc = 0;
-      // D'abord s'orienter
-      if(curRot !== wantRot){
-        // Choisir le sens le plus court (assume CW/CCW disponibles)
-        const cwDist = (wantRot - curRot + 4) % 4;
-        const ccwDist = (curRot - wantRot + 4) % 4;
-        if(cwDist <= ccwDist) this.onRotate(); else this.onRotateCCW?.();
-        return; // une action par tick de move
-      }
-      // Puis alignement horizontal
-      const dx = Math.sign((target.x|0) - (this.x|0));
-      if(dx !== 0){ this.onMove(dx); return; }
-      // Aligné: on peut hard drop
-      this.onHardDrop();
+    if(!this._hint) return;
+    // Déclencheurs au changement de pièce: HOLD si aucun hint dispo (comportement /src)
+    const curKey = this.active?.key || null;
+    if(this._copilotLastSeqKey !== curKey){
+      this._copilotLastSeqKey = curKey;
+      try{ this._copilotMaybeHold(); }catch{}
+    }
+    // Si toujours aucun hint (après éventuel HOLD), rien à faire
+    if(!this._hint || !this.active) return;
+    const now = performance.now();
+    // Alignement d’orientation: une rotation CW par tick jusqu’à atteindre l’orientation voulue (cooldown)
+    const wantRot = ((this._hint.rot|0) + 4) % 4;
+    const curRot = detectRotIndex(this.active.key, this.active.mat);
+    const needRot = ((wantRot - curRot) % 4 + 4) % 4;
+    if(needRot > 0){
+      if(now - (this._copilotLastAct||0) >= this._copilotCdMs){ this.onRotate(); this._copilotLastAct = now; }
       return;
     }
-    if(canDrop){
-      this._copilotDropAcc = 0;
-      // Mouvement vertical doux pendant la conduite
-      this.onSoftDropTick(0.02);
+    // Déplacement horizontal (un pas par tick)
+    const dx = (this._hint.x|0) - (this.x|0);
+    if(dx !== 0){
+      if(now - (this._copilotLastAct||0) >= this._copilotCdMs){ this.onMove(Math.sign(dx)); this._copilotLastAct = now; }
+      return;
     }
+    // Aligné: soft drop seulement (pas de hard drop), laisser le lock gérer
+    if(now - (this._copilotLastDrop||0) >= this._copilotDropCdMs){ this.onSoftDropTick(0.02); this._copilotLastDrop = now; }
+  }
+
+  _copilotMaybeHold(){
+    if(!this.rules?.inputs?.allowHold) return;
+    // Réplique /src: si aucun hint n’est dispo pour la pièce actuelle, tenter HOLD
+    if(!this._hint){ this.onHold(); }
   }
 }
 

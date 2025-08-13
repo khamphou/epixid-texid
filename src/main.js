@@ -2112,6 +2112,14 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
       else { cop.classList.add('hidden'); cop.classList.remove('active'); cop.setAttribute('aria-pressed','false'); copilotOn=false; }
     }catch{}
   };
+  // Helper: visibilité du panneau HOLD (legacy sidebar)
+  window.__updateHoldPanelVisible = (show)=>{
+    try{
+      const panel = document.querySelector('.sidebar .panel.hold');
+      if(!panel) return;
+      panel.classList.toggle('hidden', !show);
+    }catch{}
+  };
   // Bouton IA (Training only): visible après le bouton Nouvelle partie
   if(aiPowerBtn && aiPowerDD){
     // Masqué par défaut, visible en Training uniquement via helper
@@ -2178,8 +2186,8 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
     syncCopilotVisibility();
   }
   // Navigation écrans
-  if(btnStartSolo){ btnStartSolo.addEventListener('click', (e)=>{ try{ e.stopPropagation(); }catch{} isTraining=false; nextStartPreserveEasy = false; try{ window.__updateEasyVisible?.(false); window.__updateAIPowerVisible?.(false); window.__updateCopilotVisible?.(false); }catch{} easyMode=false; showGame(); start(); }); }
-  if(btnStartMulti){ btnStartMulti.addEventListener('click', (e)=>{ try{ e.stopPropagation(); }catch{} isTraining=false; try{ window.__updateEasyVisible?.(false); window.__updateAIPowerVisible?.(false); window.__updateCopilotVisible?.(false); }catch{} easyMode=false; showJoin(); }); }
+  if(btnStartSolo){ btnStartSolo.addEventListener('click', (e)=>{ try{ e.stopPropagation(); }catch{} isTraining=false; nextStartPreserveEasy = false; try{ window.__updateEasyVisible?.(false); window.__updateAIPowerVisible?.(false); window.__updateCopilotVisible?.(false); window.__updateHoldPanelVisible?.(true); }catch{} easyMode=false; showGame(); start(); }); }
+  if(btnStartMulti){ btnStartMulti.addEventListener('click', (e)=>{ try{ e.stopPropagation(); }catch{} isTraining=false; try{ window.__updateEasyVisible?.(false); window.__updateAIPowerVisible?.(false); window.__updateCopilotVisible?.(false); window.__updateHoldPanelVisible?.(true); }catch{} easyMode=false; showJoin(); }); }
   const onTrainingStart = (e)=>{ try{ e?.stopPropagation?.(); }catch{} isTraining=true; nextStartPreserveEasy = true; easyMode = true; if(!aiProfile) aiProfile='equilibre';
     // Sync visuel du bouton Easy et du menu
     try{
@@ -2187,6 +2195,8 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
   window.__updateAIPowerVisible?.(true);
   // Visibilité Copilot: toujours visible en Training
   try{ window.__updateCopilotVisible?.(true); }catch{}
+  // Cacher le panneau HOLD en Training (legacy)
+  try{ window.__updateHoldPanelVisible?.(false); }catch{}
     }catch{}
     showGame(); start(); try{ computeHint(); }catch{} };
   if(btnStartTraining){ btnStartTraining.addEventListener('click', onTrainingStart); }
@@ -2206,7 +2216,7 @@ goClose.addEventListener('click', ()=>{ dlgGameOver.close(); running=false; paus
         if(!btn) return;
   if(btn.id === 'btn-start-solo'){ isTraining=false; nextStartPreserveEasy = false; try{ window.__updateEasyVisible?.(false); }catch{} easyMode=false; showGame(); start(); }
   else if(btn.id === 'btn-start-multi'){ isTraining=false; try{ window.__updateEasyVisible?.(false); }catch{} easyMode=false; showJoin(); }
-  else if(btn.id === 'btn-start-training' || btn.id === 'btn-training'){ isTraining=true; nextStartPreserveEasy = true; easyMode = true; if(!aiProfile) aiProfile='equilibre'; try{ window.__syncEasyTrainingUI?.(); window.__updateAIPowerVisible?.(true); window.__updateCopilotVisible?.(true); }catch{} showGame(); start(); try{ computeHint(); }catch{} }
+  else if(btn.id === 'btn-start-training' || btn.id === 'btn-training'){ isTraining=true; nextStartPreserveEasy = true; easyMode = true; if(!aiProfile) aiProfile='equilibre'; try{ window.__syncEasyTrainingUI?.(); window.__updateAIPowerVisible?.(true); window.__updateCopilotVisible?.(true); window.__updateHoldPanelVisible?.(false); }catch{} showGame(); start(); try{ computeHint(); }catch{} }
     // ne pas relayer btn-hero-top10 ici pour éviter un double déclenchement
       });
     }

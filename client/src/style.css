@@ -87,6 +87,11 @@ canvas{display:block}
 .topbar .btn{background:linear-gradient(180deg,#1e232b,#12151a);border:1px solid #2a2f37;color:#cdd3dd;border-radius:10px;padding:7px 10px;cursor:pointer}
 .topbar .btn:hover{border-color:#3a404b;color:#fff;box-shadow:0 0 0 2px rgba(56,189,248,.15)}
 .topbar .btn.danger{background:linear-gradient(180deg,#ef4444,#b91c1c);border:1px solid #7f1d1d;color:#fff}
+/* Aligner icône + label Copilot */
+#btn-copilot{ display:inline-flex; align-items:center; gap:8px; }
+#btn-copilot .ico{ display:block; }
+/* Harmoniser le style actif du bouton Copilot avec IA Training */
+#btn-copilot.active{ background:#0ea5e9; color:#fff; border-color:#0ea5e9; box-shadow: 0 0 0 2px rgba(56,189,248,.15); }
 
 /* Modales (héritées du style legacy condensed) */
 .modal{border:none; padding:0; background:transparent}

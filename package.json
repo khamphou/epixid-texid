@@ -22,8 +22,6 @@
   "dependencies": {
     "express": "^4.19.2",
   "ws": "^8.17.0",
-  "lamejs": "^1.2.0",
-  "ffmpeg-static": "^5.2.0",
   "zod": "^3.23.8"
   }
 }

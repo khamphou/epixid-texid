@@ -670,7 +670,7 @@ export class PerformanceMonitor {
 
 ## 📊 Résumé & Priorisation
 
-### Temps Complété : **~38-40h** | Temps Restant : **~13-28h**
+### Temps Complété : **~55-59h** | Temps Restant : **~15-19h**
 
 | Priorité | Tâche | Temps | Statut | Impact |
 |----------|-------|-------|--------|--------|
@@ -682,11 +682,11 @@ export class PerformanceMonitor {
 | 🟠 P2 | ~~6. Extraire constantes~~ | 2-3h | ✅ df18d5a | Maintenabilité |
 | 🟠 P2 | ~~7. Standardiser langue~~ | 3-4h | ✅ ab67cc2 | Cohérence |
 | 🟠 P2 | ~~8. Sécuriser localStorage~~ | 2h | ✅ 6fc1eb9 | Sécurité |
-| 🟡 P3 | 9. Ajouter tests (70% coverage) | 8-10h | Qualité |
-| 🟡 P3 | 10. JSDoc complet | 4-5h | Documentation |
-| 🔵 P4 | 11. Migration TypeScript | 12-15h | Future-proof |
-| 🔵 P4 | 12. Code splitting | 3-4h | Performance |
-| 🔵 P4 | 13. Monitoring | 3-4h | Observabilité |
+| 🟡 P3 | ~~9. Ajouter tests (70% coverage)~~ | 8-10h | ✅ d97edbd | Qualité - 98% coverage |
+| 🟡 P3 | ~~10. JSDoc complet~~ | 4-5h | ✅ 4fd0ffc, 68dec6d | Documentation |
+| 🔵 P4 | 11. Migration TypeScript | 12-15h | 🔄 Future-proof |
+| 🔵 P4 | 12. Code splitting | 3-4h | 🔄 Performance |
+| 🔵 P4 | ~~13. Monitoring~~ | 3-4h | ✅ f36dcf6 | Observabilité |
 
 ---
 

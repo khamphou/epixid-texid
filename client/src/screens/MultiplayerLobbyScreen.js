@@ -14,6 +14,8 @@ export class MultiplayerLobbyScreen{
 		this._mouse = null;
 		this._overlay = null;
 		this._key = (e)=> this.onKey(e);
+		this._timers = []; // Track timers for cleanup
+		this._alive = true;
 	}
 	async init(){
 		// Show canvas and hide DOM hero when entering lobby
@@ -27,7 +29,7 @@ export class MultiplayerLobbyScreen{
 		this._handlers.push(this.ws.on('rooms', (m)=>{ this.rooms = Array.isArray(m.rooms)? m.rooms : []; if(this.sel>=this.rooms.length) this.sel = Math.max(0,this.rooms.length-1); this.renderOverlay(); }));
 		this._handlers.push(this.ws.on('players', (m)=>{ this.players = Array.isArray(m.players)? m.players : []; this.renderOverlay(); }));
 		this._handlers.push(this.ws.on('joined', (m)=>{ this.startGame(m); }));
-		this._handlers.push(this.ws.on('error', (m)=>{ this._toast = String(m.message||'Erreur'); setTimeout(()=> this._toast='', 1200); }));
+		this._handlers.push(this.ws.on('error', (m)=>{ this._toast = String(m.message||'Erreur'); this.setTimeout(()=> this._toast='', 1200); }));
 			// Say hello (obligatoire côté serveur) et ping initial
 			const { pid, cid, name } = ensureIdentity();
 			this.ws.send('hello', { name, pid, cid });
@@ -42,11 +44,28 @@ export class MultiplayerLobbyScreen{
 			this.renderOverlay();
 	}
 	dispose(){
+		this._alive = false;
+		// Clear all timers
+		try{
+			this._timers.forEach(id => clearTimeout(id));
+			this._timers = [];
+		}catch{}
 		window.removeEventListener('keydown', this._key);
 		this._handlers.forEach(off=>{ try{ off(); }catch{} });
 		this._handlers = [];
 			try{ this.core.sm.canvas.removeEventListener('click', this._onClick); }catch{}
 		try{ this._overlay?.remove?.(); this._overlay=null; }catch{}
+	}
+
+	/** Safe setTimeout that auto-clears in dispose() */
+	setTimeout(fn, delay){
+		const id = setTimeout(() => {
+			if(!this._alive) return;
+			try{ this._timers = this._timers.filter(x => x !== id); }catch{}
+			fn();
+		}, delay);
+		this._timers.push(id);
+		return id;
 	}
 		update(dt){
 			this._tim += dt;

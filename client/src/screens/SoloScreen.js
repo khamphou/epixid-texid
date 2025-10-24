@@ -730,7 +730,7 @@ SoloScreen.prototype.triggerGameOver = function(){
   if(this.gameOver) return;
   BaseGameScreen.prototype.triggerGameOver.call(this);
   try{
-    setTimeout(()=>{ if(!this._alive) return; if(typeof this.restart==='function') this.restart(); }, 5000);
+    this.setTimeout(()=>{ if(typeof this.restart==='function') this.restart(); }, 5000);
   }catch{}
 };
 

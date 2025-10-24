@@ -15,8 +15,10 @@ export class BaseGameScreen {
     this.objectives = objectives || null;
     this.gameOver = false;
   this._toasts = [];
-  // Désactive la sortie auto sur victoire par défaut (évite quitter à l’affichage de “GG!”)
+  // Désactive la sortie auto sur victoire par défaut (évite quitter à l'affichage de "GG!")
   this.autoExitOnWin = false;
+    // Track timers for cleanup in dispose()
+    this._timers = [];
     this._lastPointer = null;
     this._pActive = false;
     this._pStart = null;
@@ -68,6 +70,11 @@ export class BaseGameScreen {
 
   dispose(){
     this._alive = false;
+  // Clear all registered timers
+  try{
+    this._timers.forEach(id => clearTimeout(id));
+    this._timers = [];
+  }catch{}
   try{ if(this._tapTimer){ clearTimeout(this._tapTimer); this._tapTimer=null; this._tapPending=false; } }catch{}
     window.removeEventListener('keydown', this._kbHandlers.keydown);
     window.removeEventListener('keyup', this._kbHandlers.keyup);
@@ -80,6 +87,22 @@ export class BaseGameScreen {
       cvs.removeEventListener('pointercancel', this._ptrHandlers.up);
       cvs.removeEventListener('contextmenu', this._kbHandlers.contextmenu);
     }
+  }
+
+  /**
+   * Safe setTimeout that auto-clears in dispose()
+   * @param {Function} fn - Callback function
+   * @param {number} delay - Delay in milliseconds
+   * @returns {number} Timer ID
+   */
+  setTimeout(fn, delay){
+    const id = setTimeout(() => {
+      if(!this._alive) return; // Safety check
+      try{ this._timers = this._timers.filter(x => x !== id); }catch{}
+      fn();
+    }, delay);
+    this._timers.push(id);
+    return id;
   }
 
   // Gestion basique des touches (multi-keys simultanées supportées par le navigateur)
@@ -307,7 +330,7 @@ export class BaseGameScreen {
       if(this.objectives?.check?.()){
         // Fin de partie (victoire)
   // Plus de toast « GG! » (demande UX)
-  if(this.autoExitOnWin){ setTimeout(()=> this.navigateHome(), 900); }
+  if(this.autoExitOnWin){ this.setTimeout(()=> this.navigateHome(), 900); }
         return true;
       }
     }catch{}

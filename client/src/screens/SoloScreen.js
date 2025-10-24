@@ -5,6 +5,7 @@ import { Scoring } from '../engine/scoring.js';
 import { Garbage } from '../engine/garbage.js';
 import { audio } from '../audio.js';
 import { BaseGameScreen } from './BaseGameScreen.js';
+import { SafeStorage } from '../utils/SafeStorage.js';
 
 export class SoloScreen extends BaseGameScreen {
   constructor(core, { rules, objectives }){
@@ -316,7 +317,7 @@ export class SoloScreen extends BaseGameScreen {
     ctx.save();
     ctx.translate(sdx, sdy);
     drawPanelGlass(ctx, sideX, sideY, sideW, sideH);
-    const playerName = String(localStorage.getItem('texid_name') || 'Player').slice(0,16);
+    const playerName = SafeStorage.getString('texid_name', 16, 'Player');
     drawLabelValue(ctx, sideX+12, sideY+22, 'Joueur', playerName, false, sideW);
     drawLabelValue(ctx, sideX+12, sideY+40, 'Niveau', 'Pepouz', false, sideW);
     drawLabelValue(ctx, sideX+12, sideY+58, 'Score', String(this.scoring?.score||0), true, sideW);

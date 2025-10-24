@@ -1,5 +1,6 @@
 import { SoloScreen } from './SoloScreen.js';
 import { TETROMINOS } from '../engine/piece.js';
+import { SafeStorage } from '../utils/SafeStorage.js';
 
 // Écran Training: identique au Solo, avec assistance IA (Mode Easy)
 export class TrainingScreen extends SoloScreen {
@@ -10,7 +11,8 @@ export class TrainingScreen extends SoloScreen {
     this._hint = null; // { x, rot, yLanding, score, cleared }
   this._hintKey = null; // clé de la pièce pour laquelle l'indice est calculé (active ou HOLD)
     this._lastState = { x: null, y: null, rot: null, gridHash: null, key: null, next0: null, next1: null };
-  this._hintCooldown = 0; // (legacy) non utilisé si recalcul au spawn uniquement
+  this._hintCooldown = 0; // throttle cooldown timer (100ms)
+  this._hintThrottled = false; // throttle flag to limit recomputes
   this._hintForKey = null; // clé de la pièce pour laquelle l'indice est valide
   this._needHintRecompute = true; // forcer un recalcul (ex: changement de profil)
   this._hintUseHold = false; // recommander HOLD ?
@@ -39,8 +41,8 @@ export class TrainingScreen extends SoloScreen {
       if(btn && dd){
         btn.classList.remove('hidden');
         // Charger le profil persisté
-        let saved = null;
-        try{ saved = localStorage.getItem('texid_ai_profile'); }catch{}
+        const AI_PROFILES = ['prudent', 'conservateur', 'equilibre', 'agressif'];
+        const saved = SafeStorage.getEnum('texid_ai_profile', ['off', ...AI_PROFILES], null);
         if(saved === 'off'){
           this.easyMode = false;
           btn.setAttribute('aria-pressed','false');
@@ -96,7 +98,7 @@ export class TrainingScreen extends SoloScreen {
             const v = ev.currentTarget?.dataset?.value || 'off';
             if(v==='off'){
               this.easyMode=false; this._hint=null; btn.setAttribute('aria-pressed','false'); btn.classList.remove('active'); this._syncEasyClasses();
-              try{ localStorage.setItem('texid_ai_profile','off'); }catch{}
+              SafeStorage.set('texid_ai_profile','off');
               dd.querySelectorAll('.ai-opt').forEach(b=> b.setAttribute('aria-checked', b.dataset.value==='off' ? 'true':'false'));
               try{ const copBtn=document.getElementById('btn-copilot'); if(copBtn){ copBtn.classList.add('hidden'); copBtn.setAttribute('aria-pressed','false'); copBtn.classList.remove('active'); this.copilotOn=false; } }catch{}
               closeDD();
@@ -107,7 +109,7 @@ export class TrainingScreen extends SoloScreen {
             if(!this.easyMode){ this.easyMode = true; }
             btn.setAttribute('aria-pressed','true'); btn.classList.add('active');
             this._syncEasyClasses();
-            try{ localStorage.setItem('texid_ai_profile', v); }catch{}
+            SafeStorage.set('texid_ai_profile', v);
             dd.querySelectorAll('.ai-opt').forEach(b=> b.setAttribute('aria-checked', b.dataset.value===v ? 'true':'false'));
             if(changed) this._forceHintRecompute();
             // IA activée -> afficher Copilot bouton
@@ -176,13 +178,24 @@ export class TrainingScreen extends SoloScreen {
   update(dt){
     super.update(dt);
     if(this.gameOver) return;
+    // Update hint throttle cooldown
+    if(this._hintCooldown > 0){
+      this._hintCooldown -= dt;
+      if(this._hintCooldown <= 0){
+        this._hintThrottled = false;
+        this._hintCooldown = 0;
+      }
+    }
     // Ne calcule l'indice que lors du spawn (ou changement de profil)
     if(this.easyMode && this.active){
       const curKey = this.active?.key || null;
-      if(this._needHintRecompute || this._hintForKey !== curKey){
+      // Throttle: max 10 recomputes/sec (1 every 100ms)
+      if((this._needHintRecompute || this._hintForKey !== curKey) && !this._hintThrottled){
         this._computeHint();
         this._hintForKey = curKey;
         this._needHintRecompute = false;
+        this._hintThrottled = true;
+        this._hintCooldown = 0.1; // 100ms cooldown
       }
   // Blink HOLD si recommandé
   if(this._hintUseHold){
@@ -381,8 +394,9 @@ export class TrainingScreen extends SoloScreen {
   _stateChanged(s){ const p=this._lastState; const changed = !p || s.x!==p.x || s.y!==p.y || s.rot!==p.rot || s.gridHash!==p.gridHash || s.key!==p.key || s.next0!==p.next0 || s.next1!==p.next1; this._lastState = s; return changed; }
 
   _computeHint(){
-    if(!this.active){ this._hint=null; this._hintUseHold=false; return; }
-    const COLS = this.grid.w|0, ROWS = this.grid.h|0;
+    try {
+      if(!this.active){ this._hint=null; this._hintUseHold=false; return; }
+      const COLS = this.grid.w|0, ROWS = this.grid.h|0;
     const pieceKey = this.active.key;
     const gridNow = this._asSim();
     let best=null, bestNonClear=null;
@@ -532,6 +546,12 @@ export class TrainingScreen extends SoloScreen {
         this._hintKey = pieceKey;
         break;
       }
+    }
+    } catch(err) {
+      console.error('AI hint computation failed:', err);
+      this._hint = null;
+      this._hintUseHold = false;
+      this._hintKey = null;
     }
   }
 

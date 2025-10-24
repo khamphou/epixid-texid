@@ -1,6 +1,16 @@
 import { SoloScreen } from './SoloScreen.js';
 import { TETROMINOS } from '../engine/piece.js';
 import { SafeStorage } from '../utils/SafeStorage.js';
+import {
+  // Simulation
+  rotateN, collideGrid, cloneSim, placeOn, simulateClear, detectRotIndex,
+  // Helpers
+  stackHeight, countHoles, countEdgeHoles, bumpiness, columnHeights,
+  columnDepthAt, deepWells, overhangs,
+  // Profiles & Evaluation
+  getAIWeights, countLegalPlacements, bestPlacementScoreForNext,
+  bestPlacementThatReducesHoles, bestPlacementScoreWithFollow,
+} from '../engine/ai/index.js';
 
 // Écran Training: identique au Solo, avec assistance IA (Mode Easy)
 export class TrainingScreen extends SoloScreen {
@@ -605,136 +615,13 @@ export class TrainingScreen extends SoloScreen {
 
   _copilotMaybeHold(){
     if(!this.rules?.inputs?.allowHold) return;
-    // Réplique /src: si aucun hint n’est dispo pour la pièce actuelle, tenter HOLD
+    // Réplique /src: si aucun hint n'est dispo pour la pièce actuelle, tenter HOLD
     if(!this._hint){ this.onHold(); }
   }
 }
 
-// ---- Helpers IA (simu grille bool/entier) ----
-function rotateN(mat, n){ let r = mat; const k=(n%4+4)%4; for(let i=0;i<k;i++){ r = rotCW(r); } return r; }
-function rotCW(m){ const n=4; const r=Array.from({length:n},()=>Array(n).fill(0)); for(let j=0;j<n;j++) for(let i=0;i<n;i++) r[i][n-1-j]=m[j][i]; return r; }
-function matsEqual(a,b){ for(let j=0;j<4;j++){ for(let i=0;i<4;i++){ if(!!a[j][i] !== !!b[j][i]) return false; } } return true; }
-function detectRotIndex(key, currentMat){
-  const base = TETROMINOS[key];
-  for(let r=0;r<4;r++){ const m = rotateN(base, r); if(matsEqual(m, currentMat)) return r; }
-  return 0;
-}
-function collideGrid(sim, COLS, ROWS, px, py, mat){
-  for(let j=0;j<4;j++){
-    for(let i=0;i<4;i++){
-      if(!mat[j][i]) continue;
-      const x=px+i, y=py+j;
-      if(x<0||x>=COLS||y>=ROWS) return true;
-      if(y>=0 && sim[y][x]) return true;
-    }
-  }
-  return false;
-}
-function cloneSim(sim){ return sim.map(row=>row.slice()); }
-function placeOn(sim, COLS, ROWS, px, py, mat, key){ for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(mat[j][i]){ const gx=px+i, gy=py+j; if(gy>=0&&gy<ROWS&&gx>=0&&gx<COLS) sim[gy][gx]=1; } }
-function simulateClear(sim, COLS, ROWS){ let c=0; for(let r=ROWS-1;r>=0;){ if(sim[r].every(v=>!!v)){ sim.splice(r,1); sim.unshift(Array(COLS).fill(0)); c++; } else r--; } return c; }
-function stackHeight(sim, COLS, ROWS){ let first=ROWS; for(let r=0;r<ROWS;r++){ if(sim[r].some(Boolean)){ first=r; break; } } return ROWS-first; }
-function countHoles(sim, COLS, ROWS){ let holes=0; for(let c=0;c<COLS;c++){ let block=false; for(let r=0;r<ROWS;r++){ if(sim[r][c]) block=true; else if(block) holes++; } } return holes; }
-function countEdgeHoles(sim, COLS, ROWS){ let holes=0; for(const c of [0, COLS-1]){ let block=false; for(let r=0;r<ROWS;r++){ if(sim[r][c]) block=true; else if(block) holes++; } } return holes; }
-function bumpiness(sim, COLS, ROWS){ const h=columnHeights(sim, COLS, ROWS); let s=0; for(let c=0;c<COLS-1;c++) s+=Math.abs(h[c]-h[c+1]); return s; }
-function columnHeights(sim, COLS, ROWS){ const h=Array(COLS).fill(0); for(let c=0;c<COLS;c++){ let v=0; for(let r=0;r<ROWS;r++){ if(sim[r][c]){ v=ROWS-r; break; } } h[c]=v; } return h; }
-function columnDepthAt(sim, COLS, ROWS, col){ const h=columnHeights(sim, COLS, ROWS); const c=col; const left=c>0? h[c-1]:h[c]; const right=c<COLS-1? h[c+1]:h[c]; const depth=Math.max(0, Math.max(left,right)-h[c]); return depth; }
-function deepWells(sim, COLS, ROWS){ const h=columnHeights(sim, COLS, ROWS); let wells=0; for(let c=0;c<COLS;c++){ const left=c>0? h[c-1]:h[c]; const right=c<COLS-1? h[c+1]:h[c]; const depth=Math.max(0, Math.max(left,right)-h[c]); if(depth>=4) wells += (depth-3); } return wells; }
-function overhangs(sim, COLS, ROWS){
-  // cases vides recouvertes par un toit horizontal simple
-  let cnt=0;
-  for(let r=0;r<ROWS-1;r++){
-    for(let c=0;c<COLS-1;c++){
-      const a=sim[r][c], b=sim[r][c+1];
-      const c1=sim[r+1][c], d=sim[r+1][c+1];
-      if(!c1 && a && b && d) cnt++;
-    }
-  }
-  return cnt;
-}
-
-// Nombre de placements légaux pour éviter les pièges (helper manquant)
-function countLegalPlacements(simGrid, COLS, ROWS, key){
-  let count=0;
-  for(let rot=0; rot<4; rot++){
-    const mat = rotateN(TETROMINOS[key], rot);
-    let minX=4, maxX=0;
-    for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(mat[j][i]){ minX=Math.min(minX,i); maxX=Math.max(maxX,i); }
-    for(let px=-minX; px<=COLS-(maxX+1); px++){
-      let py=-2; while(!collideGrid(simGrid, COLS, ROWS, px, py+1, mat)) py++;
-      if(py<-1) continue; // jamais posé
-      count++;
-    }
-  }
-  return count;
-}
-function bestPlacementScoreForNext(simGrid, COLS, ROWS, nextKey, profile){
-  let best=-Infinity; const w=getAIWeights(profile);
-  for(let rot=0;rot<4;rot++){
-    const mat = rotateN(TETROMINOS[nextKey], rot);
-    let minX=4, maxX=0; for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(mat[j][i]){ minX=Math.min(minX,i); maxX=Math.max(maxX,i); }
-    for(let px=-minX; px<=COLS-(maxX+1); px++){
-      let py=-2; while(!collideGrid(simGrid, COLS, ROWS, px, py+1, mat)) py++;
-      if(py<-1) continue;
-      const sim = cloneSim(simGrid);
-      placeOn(sim, COLS, ROWS, px, py, mat, nextKey);
-      const cleared = simulateClear(sim, COLS, ROWS);
-      const h1 = stackHeight(sim, COLS, ROWS);
-      const holes = countHoles(sim, COLS, ROWS);
-      const bump = bumpiness(sim, COLS, ROWS);
-      const clearedBonus = (cleared===3? 60 : cleared*10);
-      const sc = clearedBonus - holes*w.holes*0.93 - bump*w.bump*1.0 - h1*w.height*1.0;
-      if(sc>best) best=sc;
-    }
-  }
-  return best;
-}
-function bestPlacementThatReducesHoles(simGrid, COLS, ROWS, nextKey, holesBefore){
-  let best=null;
-  for(let rot=0;rot<4;rot++){
-    const mat = rotateN(TETROMINOS[nextKey], rot);
-    let minX=4, maxX=0; for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(mat[j][i]){ minX=Math.min(minX,i); maxX=Math.max(maxX,i); }
-    for(let px=-minX; px<=COLS-(maxX+1); px++){
-      let py=-2; while(!collideGrid(simGrid, COLS, ROWS, px, py+1, mat)) py++;
-      if(py<-1) continue;
-      const sim = cloneSim(simGrid);
-      placeOn(sim, COLS, ROWS, px, py, mat, nextKey);
-      const h = countHoles(sim, COLS, ROWS);
-      const reduced = Math.max(0, holesBefore - h);
-      if(reduced>0){ const cand={ holesReduced:reduced }; if(!best || cand.holesReduced>best.holesReduced) best=cand; }
-    }
-  }
-  return best;
-}
-function bestPlacementScoreWithFollow(simGrid, COLS, ROWS, k1, k2, profile){
-  let best=-Infinity;
-  for(let rot=0;rot<4;rot++){
-    const mat = rotateN(TETROMINOS[k1], rot);
-    let minX=4, maxX=0; for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(mat[j][i]){ minX=Math.min(minX,i); maxX=Math.max(maxX,i); }
-    for(let px=-minX; px<=COLS-(maxX+1); px++){
-      let py=-2; while(!collideGrid(simGrid, COLS, ROWS, px, py+1, mat)) py++;
-      if(py<-1) continue;
-      const sim1 = cloneSim(simGrid);
-      placeOn(sim1, COLS, ROWS, px, py, mat, k1);
-      simulateClear(sim1, COLS, ROWS);
-      const sc = bestPlacementScoreForNext(sim1, COLS, ROWS, k2, profile);
-      if(sc>best) best=sc;
-    }
-  }
-  return best;
-}
-function getAIWeights(profile){
-  switch(profile){
-    case 'prudent':
-      return { holes:9.2, bump:0.7, height:0.28, look1:0.45, look2:0.22, mobility:0.35, deepWell:1.6, overhang:2.6, clear3Bonus:65, clearUnit:2, newHole:12.0, heightDropReward:3.2, clear2DangerBoost:1.5, edgeHole:1.2 };
-    case 'conservateur':
-      return { holes:8.5, bump:0.65, height:0.26, look1:0.5, look2:0.25, mobility:0.35, deepWell:1.4, overhang:2.2, clear3Bonus:70, clearUnit:3, newHole:10.0, heightDropReward:3.5, clear2DangerBoost:1.6, edgeHole:1.0 };
-    case 'agressif':
-      return { holes:6.2, bump:0.5, height:0.18, look1:0.7, look2:0.45, mobility:0.25, deepWell:1.0, overhang:1.6, clear3Bonus:95, clearUnit:7, newHole:7.2, heightDropReward:2.2, clear2DangerBoost:1.3, edgeHole:0.8 };
-    default:
-      return { holes:7.2, bump:0.55, height:0.22, look1:0.6, look2:0.35, mobility:0.3, deepWell:1.2, overhang:2.0, clear3Bonus:80, clearUnit:6, newHole:8.5, heightDropReward:2.8, clear2DangerBoost:1.5, edgeHole:0.9 };
-  }
-}
+// ---- All AI helpers now imported from /engine/ai/ ----
+// (Previously 500+ lines of inline functions)
 
 // Utilitaire pour tracer des arrondis (repris de SoloScreen)
 function roundRect(ctx,x,y,w,h,r){

@@ -50,6 +50,20 @@ export class TrainingScreen extends SoloScreen {
 
   async init(){
     await super.init();
+
+    // Initialize AI Web Worker for background computation
+    try {
+      this._aiWorker = new Worker(new URL('../workers/ai-worker.js', import.meta.url), { type: 'module' });
+      this._aiWorker.onmessage = (e) => this._handleWorkerMessage(e);
+      this._aiWorker.onerror = (err) => {
+        console.error('AI Worker error:', err);
+        this._aiWorker = null; // Fallback to sync computation
+      };
+    } catch(err) {
+      console.warn('AI Worker not available, using sync computation:', err);
+      this._aiWorker = null;
+    }
+
     // Show topbar and Easy button in Training
     try{
       document.getElementById('topbar')?.classList.remove('hidden');
@@ -181,6 +195,16 @@ export class TrainingScreen extends SoloScreen {
       const { btn, dd } = this._ui;
       // Event listeners automatically cleaned up by parent's AbortController
 
+      // Terminate AI Web Worker
+      if(this._aiWorker){
+        try{
+          this._aiWorker.terminate();
+          this._aiWorker = null;
+        }catch(err){
+          console.error('Failed to terminate AI worker:', err);
+        }
+      }
+
       // Reset and hide AI button outside Training
       if(btn){
         btn.setAttribute('aria-pressed','false');
@@ -206,12 +230,17 @@ export class TrainingScreen extends SoloScreen {
         this._hintCooldown = 0;
       }
     }
-    // Ne calcule l'indice que lors du spawn (ou changement de profil)
+    // Compute hint on spawn (or profile change)
     if(this.easyMode && this.active){
       const curKey = this.active?.key || null;
       // Throttle: max 10 recomputes/sec (1 every 100ms)
       if((this._needHintRecompute || this._hintForKey !== curKey) && !this._hintThrottled){
-        this._computeHint();
+        // Use Web Worker if available, otherwise fallback to sync
+        if(this._aiWorker){
+          this._requestHintFromWorker();
+        } else {
+          this._computeHint();
+        }
         this._hintForKey = curKey;
         this._needHintRecompute = false;
         this._hintThrottled = true;
@@ -489,6 +518,61 @@ export class TrainingScreen extends SoloScreen {
   }
   _stateChanged(s){ const p=this._lastState; const changed = !p || s.x!==p.x || s.y!==p.y || s.rot!==p.rot || s.gridHash!==p.gridHash || s.key!==p.key || s.next0!==p.next0 || s.next1!==p.next1; this._lastState = s; return changed; }
 
+  /**
+   * Request hint calculation from Web Worker (async, non-blocking)
+   */
+  _requestHintFromWorker(){
+    if(!this._aiWorker || !this.active) return;
+
+    try {
+      // Serialize grid state for worker
+      const gridSnapshot = this.grid.cells.map(row => row.slice());
+
+      this._aiWorker.postMessage({
+        type: 'compute-hint',
+        data: {
+          grid: gridSnapshot,
+          active: {
+            key: this.active.key,
+            mat: this.active.mat
+          },
+          hold: this.hold ? { key: this.hold.key } : null,
+          holdUsed: this.holdUsed,
+          nextQueue: this.nextQueue.map(p => ({ key: p.key })),
+          aiProfile: this.aiProfile,
+          x: this.x,
+          y: this.y
+        }
+      });
+    } catch(err) {
+      console.error('Failed to send message to AI worker:', err);
+      // Fallback to sync computation
+      this._computeHint();
+    }
+  }
+
+  /**
+   * Handle hint result from Web Worker
+   */
+  _handleWorkerMessage(e){
+    const { type, hint, hintUseHold, hintKey, error } = e.data;
+
+    if (type === 'hint-error') {
+      console.error('AI Worker returned error:', error);
+      return;
+    }
+
+    if (type === 'hint-result') {
+      this._hint = hint;
+      this._hintUseHold = hintUseHold;
+      this._hintKey = hintKey;
+    }
+  }
+
+  /**
+   * Compute hint synchronously (fallback if worker unavailable)
+   * @deprecated Use Web Worker for better performance
+   */
   _computeHint(){
     try {
       if(!this.active){ this._hint=null; this._hintUseHold=false; return; }

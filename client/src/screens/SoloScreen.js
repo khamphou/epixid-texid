@@ -67,8 +67,13 @@ export class SoloScreen extends BaseGameScreen {
   try{ await audio.resume?.(); audio.playStartCue?.(3); }catch{}
   // Brief GO overlay after countdown
   this._go = null;
-  window.addEventListener('keydown', this.onKeyDown);
-  window.addEventListener('keyup', this.onKeyUp);
+
+  // Use parent's AbortController signal for automatic cleanup
+  const signal = this._abortController?.signal;
+  if(signal){
+    window.addEventListener('keydown', this.onKeyDown, { signal });
+    window.addEventListener('keyup', this.onKeyUp, { signal });
+  }
   }
   update(dt){
     // Even after gameOver, let visual animations finish; but freeze gameplay
@@ -669,8 +674,7 @@ export class SoloScreen extends BaseGameScreen {
   handleInput(){}
   dispose(){
   try{ const btn=document.getElementById('btn-new'); if(btn){ btn.classList.add('hidden'); btn.onclick=null; } }catch{}
-    window.removeEventListener('keydown', this.onKeyDown);
-    window.removeEventListener('keyup', this.onKeyUp);
+    // Event listeners automatically cleaned up by parent's AbortController
   this.input?.stop?.();
     super.dispose?.();
   }

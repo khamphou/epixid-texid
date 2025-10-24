@@ -50,42 +50,45 @@ export class BaseGameScreen {
   async init(){
   this._alive = true;
 
+    // AbortController for automatic event listener cleanup
+    this._abortController = new AbortController();
+    const signal = this._abortController.signal;
+
     // Show canvas and hide DOM hero when entering game screen
     this.core.sm.showCanvas();
 
-    // Entrées clavier
-    window.addEventListener('keydown', this._kbHandlers.keydown);
-    window.addEventListener('keyup', this._kbHandlers.keyup);
-    // Pointeur sur le canvas géré par ScreenManager
+    // Keyboard inputs
+    window.addEventListener('keydown', this._kbHandlers.keydown, { signal });
+    window.addEventListener('keyup', this._kbHandlers.keyup, { signal });
+    // Pointer on canvas managed by ScreenManager
     const cvs = this.core.sm.canvas;
     if(cvs){
       try{ cvs.style.touchAction = 'none'; }catch{}
-      cvs.addEventListener('pointerdown', this._ptrHandlers.down);
-      cvs.addEventListener('pointermove', this._ptrHandlers.move);
-      cvs.addEventListener('pointerup', this._ptrHandlers.up);
-      cvs.addEventListener('pointercancel', this._ptrHandlers.up);
-      cvs.addEventListener('contextmenu', this._kbHandlers.contextmenu);
+      cvs.addEventListener('pointerdown', this._ptrHandlers.down, { signal });
+      cvs.addEventListener('pointermove', this._ptrHandlers.move, { signal });
+      cvs.addEventListener('pointerup', this._ptrHandlers.up, { signal });
+      cvs.addEventListener('pointercancel', this._ptrHandlers.up, { signal });
+      cvs.addEventListener('contextmenu', this._kbHandlers.contextmenu, { signal });
     }
   }
 
   dispose(){
     this._alive = false;
+
+  // Abort all event listeners automatically
+  try{ this._abortController?.abort(); }catch{}
+
   // Clear all registered timers
   try{
     this._timers.forEach(id => clearTimeout(id));
     this._timers = [];
   }catch{}
   try{ if(this._tapTimer){ clearTimeout(this._tapTimer); this._tapTimer=null; this._tapPending=false; } }catch{}
-    window.removeEventListener('keydown', this._kbHandlers.keydown);
-    window.removeEventListener('keyup', this._kbHandlers.keyup);
+
+    // Release pointer capture if active
     const cvs = this.core.sm.canvas;
     if(cvs){
       try{ if(this._pId!=null) cvs.releasePointerCapture(this._pId); }catch{}
-      cvs.removeEventListener('pointerdown', this._ptrHandlers.down);
-      cvs.removeEventListener('pointermove', this._ptrHandlers.move);
-      cvs.removeEventListener('pointerup', this._ptrHandlers.up);
-      cvs.removeEventListener('pointercancel', this._ptrHandlers.up);
-      cvs.removeEventListener('contextmenu', this._kbHandlers.contextmenu);
     }
   }
 

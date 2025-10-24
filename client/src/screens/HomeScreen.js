@@ -19,14 +19,18 @@ export class HomeScreen{
     this._onKey=this._onKey.bind(this);
   }
   async init(){
-    // Si l'accueil DOM (hero) est présent, on ne crée pas de drawer ni de raccourcis ici
+    // AbortController for automatic event listener cleanup
+    this._abortController = new AbortController();
+    const signal = this._abortController.signal;
+
+    // If DOM home (hero) is present, we don't create drawer nor shortcuts here
     this.domHome = document.getElementById('screen-start');
 
     // Always hide canvas and show DOM hero when on HomeScreen
     this.core.sm.hideCanvas();
 
     if(!this.domHome){
-      window.addEventListener('keydown', this._onKey);
+      window.addEventListener('keydown', this._onKey, { signal });
       this.drawer = document.createElement('div');
       Object.assign(this.drawer.style, { position:'fixed', top:'0', right:'0', width:'360px', height:'100%', background:'rgba(10,14,20,0.96)', color:'#e5e7eb', boxShadow:'-8px 0 24px rgba(0,0,0,0.5)', transform:'translateX(100%)', transition:'transform .25s ease', padding:'24px', zIndex:'10', overflow:'auto', font:'14px/1.5 system-ui,Segoe UI,Roboto,Arial' });
       this.drawer.innerHTML = `<h2 style="margin:0 0 12px;font-size:18px;color:#93c5fd">Crédits</h2>
@@ -38,9 +42,9 @@ export class HomeScreen{
     const btnTraining = document.getElementById('btn-training');
     if(btnTraining){
       btnTraining.addEventListener('click', ()=>{
-        // Utiliser le lanceur standard pour charger des règles valides
+        // Use standard launcher to load valid rules
         this._launchTraining('daily_tspin_rush');
-      });
+      }, { signal });
     }
   }
   update(){}
@@ -79,14 +83,12 @@ export class HomeScreen{
     ctx.fillText('↑/↓ naviguer, Entrée valider, C crédits', x, y0+this.items.length*lh + 20);
   }
   handleInput(){ }
-  dispose(){ 
-    if(!this.domHome){ 
-      window.removeEventListener('keydown', this._onKey); 
-      this.drawer?.remove?.(); 
-    }
-    const btnTraining = document.getElementById('btn-training');
-    if(btnTraining){
-      // remove listeners if needed
+  dispose(){
+    // Abort all event listeners automatically
+    try{ this._abortController?.abort(); }catch{}
+
+    if(!this.domHome){
+      this.drawer?.remove?.();
     }
   }
   async _launchSolo(modeId='br10'){

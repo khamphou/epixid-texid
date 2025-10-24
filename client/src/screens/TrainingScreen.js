@@ -105,10 +105,12 @@ export class TrainingScreen extends SoloScreen {
           this._ui.ddOpen = true;
         };
         const onDoc = (e)=>{ if(!this._ui.ddOpen) return; if(!dd.contains(e.target) && e.target!==btn){ closeDD(); } };
-        btn.addEventListener('click', onClick);
-        document.addEventListener('click', onDoc);
 
-        // Sélection d’un profil
+        const signal = this._abortController?.signal;
+        btn.addEventListener('click', onClick, { signal });
+        document.addEventListener('click', onDoc, { signal });
+
+        // Profile selection
         dd.querySelectorAll('.ai-opt')?.forEach(el=>{
           el.addEventListener('click', (ev)=>{
             const v = ev.currentTarget?.dataset?.value || 'off';
@@ -136,7 +138,7 @@ export class TrainingScreen extends SoloScreen {
         this._ui = { btn, dd, ddOpen:false, onClick, onDocClick:onDoc };
       }
     }catch{}
-    // Bouton Copilot (visible en Training seulement ET si IA ≠ Off)
+    // Copilot button (visible in Training only AND if AI ≠ Off)
     try{
       const copBtn = document.getElementById('btn-copilot');
       if(copBtn){
@@ -145,7 +147,9 @@ export class TrainingScreen extends SoloScreen {
           copBtn.classList.toggle('hidden', !iaOn);
         };
         const syncState = ()=>{ copBtn.setAttribute('aria-pressed', this.copilotOn? 'true':'false'); copBtn.classList.toggle('active', !!this.copilotOn); };
-        copBtn.addEventListener('click', ()=>{ this.copilotOn = !this.copilotOn; this._copilotHeldForKey = null; syncState(); });
+
+        const signal = this._abortController?.signal;
+        copBtn.addEventListener('click', ()=>{ this.copilotOn = !this.copilotOn; this._copilotHeldForKey = null; syncState(); }, { signal });
         syncVisible();
         syncState();
       }
@@ -174,10 +178,10 @@ export class TrainingScreen extends SoloScreen {
 
   dispose(){
     try{
-      const { btn, dd, onClick, onDocClick } = this._ui;
-      if(btn && onClick) btn.removeEventListener('click', onClick);
-      if(onDocClick) document.removeEventListener('click', onDocClick);
-      // Réinitialiser et masquer le bouton IA hors Training
+      const { btn, dd } = this._ui;
+      // Event listeners automatically cleaned up by parent's AbortController
+
+      // Reset and hide AI button outside Training
       if(btn){
         btn.setAttribute('aria-pressed','false');
         btn.setAttribute('aria-expanded','false');
@@ -185,7 +189,7 @@ export class TrainingScreen extends SoloScreen {
         btn.classList.add('hidden');
       }
       if(dd){ dd.classList.add('hidden'); }
-      // Masquer le bouton Copilot hors Training
+      // Hide Copilot button outside Training
   try{ const copBtn = document.getElementById('btn-copilot'); if(copBtn){ copBtn.setAttribute('aria-pressed','false'); copBtn.classList.remove('active'); copBtn.classList.add('hidden'); } }catch{}
     }catch{}
     super.dispose();

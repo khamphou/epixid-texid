@@ -18,42 +18,51 @@ export class MultiplayerLobbyScreen{
 		this._alive = true;
 	}
 	async init(){
+		// AbortController for automatic event listener cleanup
+		this._abortController = new AbortController();
+		const signal = this._abortController.signal;
+
 		// Show canvas and hide DOM hero when entering lobby
 		this.core.sm.showCanvas();
 
-		// Connexion WS
+		// WS connection
 		const url = wsUrl();
 		this.ws = new RealtimeClient();
 		this.ws.connect(url);
-		// Abonnements messages
+		// Message subscriptions
 		this._handlers.push(this.ws.on('rooms', (m)=>{ this.rooms = Array.isArray(m.rooms)? m.rooms : []; if(this.sel>=this.rooms.length) this.sel = Math.max(0,this.rooms.length-1); this.renderOverlay(); }));
 		this._handlers.push(this.ws.on('players', (m)=>{ this.players = Array.isArray(m.players)? m.players : []; this.renderOverlay(); }));
 		this._handlers.push(this.ws.on('joined', (m)=>{ this.startGame(m); }));
 		this._handlers.push(this.ws.on('error', (m)=>{ this._toast = String(m.message||'Erreur'); this.setTimeout(()=> this._toast='', 1200); }));
-			// Say hello (obligatoire côté serveur) et ping initial
+			// Say hello (mandatory server-side) and initial ping
 			const { pid, cid, name } = ensureIdentity();
 			this.ws.send('hello', { name, pid, cid });
 			this.ws.send('ping', { cid });
-		window.addEventListener('keydown', this._key);
-			// Souris pour sélectionner / rejoindre
+		window.addEventListener('keydown', this._key, { signal });
+			// Mouse to select / join
 			const cvs = this.core.sm.canvas;
 			this._onClick = (e)=> this.onClick(e);
-			cvs.addEventListener('click', this._onClick);
-			// Overlay UI legacy-like (DOM)
+			cvs.addEventListener('click', this._onClick, { signal });
+			// Legacy-like DOM overlay UI
 			this.mountOverlay();
 			this.renderOverlay();
 	}
 	dispose(){
 		this._alive = false;
+
+		// Abort all event listeners automatically
+		try{ this._abortController?.abort(); }catch{}
+
 		// Clear all timers
 		try{
 			this._timers.forEach(id => clearTimeout(id));
 			this._timers = [];
 		}catch{}
-		window.removeEventListener('keydown', this._key);
+
+		// Unsubscribe from WS messages
 		this._handlers.forEach(off=>{ try{ off(); }catch{} });
 		this._handlers = [];
-			try{ this.core.sm.canvas.removeEventListener('click', this._onClick); }catch{}
+
 		try{ this._overlay?.remove?.(); this._overlay=null; }catch{}
 	}
 
@@ -173,10 +182,11 @@ export class MultiplayerLobbyScreen{
 				el.appendChild(st);
 				document.body.appendChild(el);
 				this._overlay = el;
-				// Bind overlay events
-				el.querySelector('#mp-create')?.addEventListener('click', ()=> this.create());
-				el.querySelector('#mp-exit')?.addEventListener('click', ()=> this.navigateHome());
-				el.querySelector('#mp-purge')?.addEventListener('click', async ()=>{ try{ await fetch('/purge', { method:'POST' }); }catch{} finally{ this.renderOverlay(); } });
+				// Bind overlay events (using AbortController signal)
+				const signal = this._abortController?.signal;
+				el.querySelector('#mp-create')?.addEventListener('click', ()=> this.create(), { signal });
+				el.querySelector('#mp-exit')?.addEventListener('click', ()=> this.navigateHome(), { signal });
+				el.querySelector('#mp-purge')?.addEventListener('click', async ()=>{ try{ await fetch('/purge', { method:'POST' }); }catch{} finally{ this.renderOverlay(); } }, { signal });
 				const tabs = el.querySelectorAll('.mp-tab');
 				tabs.forEach(t=> t.addEventListener('click', ()=>{
 					tabs.forEach(x=> x.classList.remove('active'));
@@ -186,7 +196,7 @@ export class MultiplayerLobbyScreen{
 					el.querySelector('#mp-players')?.classList.toggle('hidden', tab!=='players');
 					el.querySelector('#mp-empty')?.classList.add('hidden');
 					this.renderOverlay();
-				}));
+				}, { signal }));
 			}
 			renderOverlay(){
 				const el = this._overlay; if(!el) return;

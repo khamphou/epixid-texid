@@ -143,31 +143,38 @@ export class MultiplayerGameScreen extends BaseGameScreen{
 		this._stateT = (this._stateT||0) + dt;
 		if(this._stateT >= 0.08){ this._stateT = 0; this.sendState(); }
 	}
-	render(ctx){
-		const { canvas } = ctx;
-		ctx.fillStyle='#0b0f14'; ctx.fillRect(0,0,canvas.width,canvas.height);
-		// Layout responsive avec sidebar à droite contenant un mini plateau adverse
+	_calculateLayout(ctx){
 		const gap = 20; const margin = 12;
 		const topbarEl = (typeof document!=='undefined') ? document.getElementById('topbar') : null;
 		const topbarVisible = !!topbarEl && getComputedStyle(topbarEl).display !== 'none';
 		const topbarH = topbarVisible ? (topbarEl.getBoundingClientRect().height||0) : 0;
 		const sideMinW = 240, sideIdealW = 300;
-		const maxCellW = Math.floor((canvas.width - margin*2 - gap - sideMinW) / this.grid.w);
-		const maxCellH = Math.floor((canvas.height - margin*2 - topbarH) / this.grid.h);
+		const maxCellW = Math.floor((ctx.canvas.width - margin*2 - gap - sideMinW) / this.grid.w);
+		const maxCellH = Math.floor((ctx.canvas.height - margin*2 - topbarH) / this.grid.h);
 		const cell = Math.max(12, Math.min(24, Math.min(maxCellW, maxCellH)));
 		const bw = this.grid.w*cell, bh = this.grid.h*cell;
-		const sideW = Math.max(sideMinW, Math.min(sideIdealW, canvas.width - margin*2 - bw - gap));
-		const x0 = Math.max(margin, Math.floor((canvas.width - (bw + gap + sideW))/2));
-		const y0 = Math.max(margin + topbarH, Math.floor((canvas.height - bh)/2));
-			const sideX = x0 + bw + gap; const sideY = y0; const sideH = Math.max(180, Math.min(bh, canvas.height - topbarH - margin*2));
-			// Shake amorti
-			if(this._shake>0){ this._shakeX = (Math.random()*2-1)*this._shake; this._shakeY = (Math.random()*2-1)*this._shake; this._shake = Math.max(0, this._shake - 0.4); } else { this._shakeX=0; this._shakeY=0; }
-			// Jitter >90% stress
-			const jAmp = BaseGameScreen.jitterForStress(this._stressK||0, 2.2);
-			const jx = (Math.random()*2-1) * jAmp + this._shakeX;
-			const jy = (Math.random()*2-1) * jAmp + this._shakeY;
-			let nukeGlow = 0; if(this._nuke){ const k = Math.max(0, Math.min(1, (performance.now() - this._nuke.start)/this._nuke.dur)); nukeGlow = 1 - k; }
-			drawInner(ctx, x0 + jx, y0 + jy, bw, bh, this._stressK||0, this.time||0, nukeGlow);
+		const sideW = Math.max(sideMinW, Math.min(sideIdealW, ctx.canvas.width - margin*2 - bw - gap));
+		const x0 = Math.max(margin, Math.floor((ctx.canvas.width - (bw + gap + sideW))/2));
+		const y0 = Math.max(margin + topbarH, Math.floor((ctx.canvas.height - bh)/2));
+		const sideX = x0 + bw + gap; const sideY = y0; const sideH = Math.max(180, Math.min(bh, ctx.canvas.height - topbarH - margin*2));
+		return { x0, y0, bw, bh, cell, sideX, sideY, sideW, sideH, gap };
+	}
+
+	_calculateShakeJitter(){
+		// Shake decay
+		if(this._shake>0){ this._shakeX = (Math.random()*2-1)*this._shake; this._shakeY = (Math.random()*2-1)*this._shake; this._shake = Math.max(0, this._shake - 0.4); } else { this._shakeX=0; this._shakeY=0; }
+		// Jitter for high stress (>90%)
+		const jAmp = BaseGameScreen.jitterForStress(this._stressK||0, 2.2);
+		const jx = (Math.random()*2-1) * jAmp + this._shakeX;
+		const jy = (Math.random()*2-1) * jAmp + this._shakeY;
+		let nukeGlow = 0; if(this._nuke){ const k = Math.max(0, Math.min(1, (performance.now() - this._nuke.start)/this._nuke.dur)); nukeGlow = 1 - k; }
+		return { jx, jy, nukeGlow };
+	}
+
+	_renderBoard(ctx, layout, shake){
+		const { x0, y0, bw, bh, cell } = layout;
+		const { jx, jy, nukeGlow } = shake;
+		drawInner(ctx, x0 + jx, y0 + jy, bw, bh, this._stressK||0, this.time||0, nukeGlow);
 		// Moi (masquer temporairement les cellules de la pièce verrouillée si anim en cours)
 		let hideSet = null; if(this._dropAnim){ hideSet = new Set(this._dropAnim.finalCells?.map(c=>`${c.x},${c.y}`)); }
 		for(let y=0;y<this.grid.h;y++) for(let x=0;x<this.grid.w;x++){
@@ -185,7 +192,7 @@ export class MultiplayerGameScreen extends BaseGameScreen{
 				}
 			}
 		}
-		// Pièce active, avec transparence si au-dessus
+		// Active piece (with transparency above board)
 		if(this.active){
 			const mat=this.active.mat; const yAct=Math.floor(this.y); const xAct=this.x; const col=pieceColor(this.active.key);
 			for(let j=0;j<4;j++){
@@ -195,19 +202,26 @@ export class MultiplayerGameScreen extends BaseGameScreen{
 				}
 			}
 		}
-		// Animation de chute rapide (overlay) avec léger motion blur
-		if(this._dropAnim){
-			const a=this._dropAnim; const k=Math.min(1, a.t/a.dur); const kk = (t=> 1-Math.pow(1-t,3))(k); const yInterp=a.yStart + (a.yEnd-a.yStart)*kk;
-			const trailCount=2; const dyTotal=Math.max(0,(yInterp-a.yStart)); const trailStep=dyTotal/(trailCount+1);
-			for(let j=0;j<4;j++){
-				for(let i=0;i<4;i++){
-					if(!a.mat[j][i]) continue; const gx=a.x+i; if(gx<0||gx>=this.grid.w) continue;
-					const yMain=yInterp+j; let px=x0+gx*cell, py=y0+yMain*cell; ctx.save(); ctx.globalAlpha=0.92; drawTile(ctx, px, py, cell, a.color); ctx.restore();
-					for(let t=1;t<=trailCount;t++){ const yTrail=(yInterp-t*trailStep)+j; px=x0+gx*cell; py=y0+yTrail*cell; ctx.save(); ctx.globalAlpha=0.12*(1-t/(trailCount+0.5)); drawTile(ctx, px, py, cell, a.color); ctx.restore(); }
-				}
+	}
+
+	_renderDropAnimation(ctx, layout){
+		// Hard drop animation with motion blur
+		if(!this._dropAnim) return;
+		const { x0, y0, cell } = layout;
+		const a=this._dropAnim; const k=Math.min(1, a.t/a.dur); const kk = (t=> 1-Math.pow(1-t,3))(k); const yInterp=a.yStart + (a.yEnd-a.yStart)*kk;
+		const trailCount=2; const dyTotal=Math.max(0,(yInterp-a.yStart)); const trailStep=dyTotal/(trailCount+1);
+		for(let j=0;j<4;j++){
+			for(let i=0;i<4;i++){
+				if(!a.mat[j][i]) continue; const gx=a.x+i; if(gx<0||gx>=this.grid.w) continue;
+				const yMain=yInterp+j; let px=x0+gx*cell, py=y0+yMain*cell; ctx.save(); ctx.globalAlpha=0.92; drawTile(ctx, px, py, cell, a.color); ctx.restore();
+				for(let t=1;t<=trailCount;t++){ const yTrail=(yInterp-t*trailStep)+j; px=x0+gx*cell; py=y0+yTrail*cell; ctx.save(); ctx.globalAlpha=0.12*(1-t/(trailCount+0.5)); drawTile(ctx, px, py, cell, a.color); ctx.restore(); }
 			}
 		}
-		// Mini plateau adverse dans la sidebar + NEXT (moi)
+	}
+
+	_renderSidebar(ctx, layout, shake){
+		const { x0, y0, bw, cell, gap, sideX, sideY, sideW, sideH } = layout;
+		// Mini opponent board in sidebar + NEXT queue
 		{
 			const miniCell = Math.max(8, Math.floor(Math.min((sideW-32)/this.oppGrid.w, (sideH-64)/this.oppGrid.h)));
 			const mx = sideX + Math.floor((sideW - this.oppGrid.w*miniCell)/2);
@@ -302,86 +316,99 @@ export class MultiplayerGameScreen extends BaseGameScreen{
 				}
 			}
 		}
-		if(this.oppActive){
-			// Pièce active adverse, avec transparence au-dessus
-			const mat=this.oppActive.mat; const yAct=Math.floor(this.oppActive.y||0); const xAct=this.oppActive.x|0; const col=pieceColor(this.oppActive.key);
-			for(let j=0;j<4;j++){
-				for(let i=0;i<4;i++){
-					if(!mat[j][i]) continue; const gx=xAct+i, gy=yAct+j; if(gx<0||gx>=this.oppGrid.w) continue;
-					const px=x0+bw+gap+gx*cell, py=y0+gy*cell; ctx.save(); if(gy<0) ctx.globalAlpha=0.45; drawTile(ctx, px, py, cell, col); ctx.restore();
-				}
-			}
-			// Ghost adverse (si pertinent)
-			const gy = computeGhostY(this.oppGrid, this.oppActive, xAct, yAct);
-			for(let j=0;j<4;j++){
-				for(let i=0;i<4;i++){
-					if(!mat[j][i]) continue; const gx=xAct+i, gy2=gy+j; if(gx<0||gx>=this.oppGrid.w) continue;
-					const px=x0+bw+gap+gx*cell, py=y0+gy2*cell; ctx.save(); ctx.globalAlpha=(gy2<0?0.35:0.75); drawGhostCell(ctx, px, py, cell); ctx.restore();
-				}
-			}
-		}
-		// Labels
+	}
+
+	_renderLabels(ctx, layout){
+		const { x0, y0, bw, bh, cell, gap } = layout;
+		// Player names above boards
 		ctx.fillStyle='#cbd5e1'; ctx.font='14px system-ui,Segoe UI,Roboto';
-		ctx.textAlign='center'; ctx.fillText(this.selfName||'Moi', x0+bw/2, y0-14); ctx.fillText(this.oppName||'Adversaire', x0+bw+gap+bw/2, y0-14);
+		ctx.textAlign='center';
+		ctx.fillText(this.selfName||'Moi', x0+bw/2, y0-14);
+		ctx.fillText(this.oppName||'Adversaire', x0+bw+gap+bw/2, y0-14);
 		this._boardRect = { x:x0, y:y0, w:bw, h:bh, cell };
+	}
+
+	_renderCountdown(ctx){
+		// Countdown (3, 2, 1) with bounce/zoom + glow + vibrant colors
+		if(!this._countdown) return;
+		const left = Math.max(0, this._countdown.dur - (performance.now()-this._countdown.start));
+		const n = Math.max(1, Math.ceil(left/1000)); // 3..2..1
+		const msInBucket = (1000 - (left % 1000)) % 1000; // 0->999 for each digit
+		const p = Math.min(1, msInBucket/1000);
+		const s = 0.6 + 0.6*easeOutBack(p);
+		const cx = ctx.canvas.width/2, cy = ctx.canvas.height/2;
+		const palette = { 3:'#22d3ee', 2:'#a78bfa', 1:'#fbbf24' };
+		const col = palette[n] || '#22d3ee';
+		ctx.save();
+		ctx.fillStyle='rgba(0,0,0,0.45)';
+		ctx.fillRect(0,0,ctx.canvas.width,ctx.canvas.height);
+		ctx.translate(cx, cy);
+		ctx.scale(s, s);
+		ctx.textAlign='center'; ctx.textBaseline='middle';
+		ctx.shadowColor = col; ctx.shadowBlur = 28;
+		ctx.lineWidth = 6; ctx.strokeStyle='rgba(0,0,0,0.55)';
+		ctx.font='bold 72px Orbitron, system-ui';
+		ctx.strokeText(String(n), 0, 0);
+		ctx.fillStyle = col; ctx.fillText(String(n), 0, 0);
+		ctx.restore();
+	}
+
+	_renderGo(ctx){
+		// Brief "GO" flash after countdown
+		if(this._countdown || !this._go) return;
+		const p = Math.min(1, (performance.now() - this._go.start)/this._go.dur);
+		const s = 0.9 + 0.3*easeOutBack(p);
+		const col = '#34d399';
+		ctx.save();
+		ctx.translate(ctx.canvas.width/2, ctx.canvas.height/2);
+		ctx.scale(s, s);
+		ctx.textAlign='center'; ctx.textBaseline='middle';
+		ctx.shadowColor = col; ctx.shadowBlur = 22;
+		ctx.lineWidth = 5; ctx.strokeStyle='rgba(0,0,0,0.55)';
+		ctx.font='bold 60px Orbitron, system-ui';
+		ctx.strokeText('GO', 0, 0);
+		ctx.fillStyle = col; ctx.fillText('GO', 0, 0);
+		ctx.restore();
+		if(performance.now() - this._go.start >= this._go.dur){ this._go = null; }
+	}
+
+	_renderWaitingOverlay(ctx){
+		// Waiting for player: display banner
+		if(this.started) return;
+		ctx.save();
+		ctx.fillStyle = 'rgba(0,0,0,0.55)';
+		ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+		ctx.fillStyle = '#cbd5e1';
+		ctx.font = 'bold 24px Orbitron, system-ui';
+		ctx.textAlign = 'center'; ctx.textBaseline='middle';
+		ctx.fillText("En attente d'un joueur…", ctx.canvas.width/2, ctx.canvas.height/2);
+		ctx.restore();
+	}
+
+	_renderNextAnimation(ctx){
+		// NEXT animation (overlay)
+		if(!this._nextAnim) return;
+		const a=this._nextAnim; const k=Math.min(1, a.t/a.dur); const kk=(t=>1-Math.pow(1-t,3))(k);
+		const lerp=(v0,v1)=> v0 + (v1-v0)*kk;
+		for(const it of a.items){ const x=lerp(it.x0,it.x1), y=lerp(it.y0,it.y1), c=lerp(it.c0,it.c1); drawMat(ctx, it.mat, x, y, c, it.color); }
+	}
+
+	render(ctx){
+		// Background
+		ctx.fillStyle='#0b0f14'; ctx.fillRect(0,0,ctx.canvas.width,ctx.canvas.height);
+
+		const layout = this._calculateLayout(ctx);
+		const shake = this._calculateShakeJitter();
+
+		this._renderBoard(ctx, layout, shake);
+		this._renderDropAnimation(ctx, layout);
+		this._renderSidebar(ctx, layout, shake);
+		this._renderLabels(ctx, layout);
 		super.render?.(ctx);
-		// Compte à rebours visuel (3s) avec bounce/zoom + glow + couleurs vives
-		if(this._countdown){
-			const left = Math.max(0, this._countdown.dur - (performance.now()-this._countdown.start));
-			const n = Math.max(1, Math.ceil(left/1000)); // 3..2..1
-			const msInBucket = (1000 - (left % 1000)) % 1000; // 0->999 pour chaque chiffre
-			const p = Math.min(1, msInBucket/1000);
-			const s = 0.6 + 0.6*easeOutBack(p);
-			const cx = canvas.width/2, cy = canvas.height/2;
-			const palette = { 3:'#22d3ee', 2:'#a78bfa', 1:'#fbbf24' };
-			const col = palette[n] || '#22d3ee';
-			ctx.save();
-			ctx.fillStyle='rgba(0,0,0,0.45)';
-			ctx.fillRect(0,0,canvas.width,canvas.height);
-			ctx.translate(cx, cy);
-			ctx.scale(s, s);
-			ctx.textAlign='center'; ctx.textBaseline='middle';
-			ctx.shadowColor = col; ctx.shadowBlur = 28;
-			ctx.lineWidth = 6; ctx.strokeStyle='rgba(0,0,0,0.55)';
-			ctx.font='bold 72px Orbitron, system-ui';
-			ctx.strokeText(String(n), 0, 0);
-			ctx.fillStyle = col; ctx.fillText(String(n), 0, 0);
-			ctx.restore();
-		}
-		// Flash "GO" bref après le décompte
-		if(!this._countdown && this._go){
-			const p = Math.min(1, (performance.now() - this._go.start)/this._go.dur);
-			const s = 0.9 + 0.3*easeOutBack(p);
-			const col = '#34d399';
-			ctx.save();
-			ctx.translate(canvas.width/2, canvas.height/2);
-			ctx.scale(s, s);
-			ctx.textAlign='center'; ctx.textBaseline='middle';
-			ctx.shadowColor = col; ctx.shadowBlur = 22;
-			ctx.lineWidth = 5; ctx.strokeStyle='rgba(0,0,0,0.55)';
-			ctx.font='bold 60px Orbitron, system-ui';
-			ctx.strokeText('GO', 0, 0);
-			ctx.fillStyle = col; ctx.fillText('GO', 0, 0);
-			ctx.restore();
-			if(performance.now() - this._go.start >= this._go.dur){ this._go = null; }
-		}
-			// Attente d'un joueur: afficher un bandeau
-			if(!this.started){
-				ctx.save();
-				ctx.fillStyle = 'rgba(0,0,0,0.55)';
-				ctx.fillRect(0, 0, canvas.width, canvas.height);
-				ctx.fillStyle = '#cbd5e1';
-				ctx.font = 'bold 24px Orbitron, system-ui';
-				ctx.textAlign = 'center'; ctx.textBaseline='middle';
-				ctx.fillText("En attente d’un joueur…", canvas.width/2, canvas.height/2);
-				ctx.restore();
-			}
-		// Animation NEXT (overlay)
-		if(this._nextAnim){
-			const a=this._nextAnim; const k=Math.min(1, a.t/a.dur); const kk=(t=>1-Math.pow(1-t,3))(k);
-			const lerp=(v0,v1)=> v0 + (v1-v0)*kk;
-			for(const it of a.items){ const x=lerp(it.x0,it.x1), y=lerp(it.y0,it.y1), c=lerp(it.c0,it.c1); drawMat(ctx, it.mat, x, y, c, it.color); }
-		}
+		this._renderCountdown(ctx);
+		this._renderGo(ctx);
+		this._renderWaitingOverlay(ctx);
+		this._renderNextAnimation(ctx);
 	}
 	handleInput(){}
 	getBoardRect(){ return this._boardRect; }
@@ -481,6 +508,25 @@ function drawInner(ctx, x,y,w,h, stress=0, t=0, nukeGlow=0){ ctx.save();
 function drawMat(ctx,mat,x0,y0,cell,color){ for(let j=0;j<4;j++){ for(let i=0;i<4;i++){ if(!mat[j][i]) continue; const x=x0+i*cell, y=y0+j*cell; drawTile(ctx, x, y, cell, color); } } }
 function pieceColor(key){ return { I:'#22d3ee', O:'#fbbf24', T:'#a78bfa', S:'#22c55e', Z:'#ef4444', J:'#60a5fa', L:'#fb923c' }[key] || (typeof key==='string'? key : '#60a5fa'); }
 function drawTile(ctx, x,y, size, color){ ctx.save(); const g=ctx.createLinearGradient(x,y,x,y+size); g.addColorStop(0, shade(color, 18)); g.addColorStop(1, shade(color,-14)); ctx.fillStyle=g; ctx.fillRect(x+1,y+1,size-2,size-2); ctx.restore(); }
+function drawGhostCell(ctx, x,y,size){
+	ctx.save();
+	ctx.strokeStyle='rgba(148,163,184,.55)';
+	ctx.lineWidth = 1.5;
+	roundRect(ctx, x+3, y+3, size-6, size-6, 6);
+	ctx.stroke();
+	ctx.restore();
+}
+function roundRect(ctx,x,y,w,h,r){
+	const rr = Math.max(0, Math.min(r, Math.abs(w)/2, Math.abs(h)/2));
+	ctx.beginPath();
+	ctx.moveTo(x+rr,y);
+	ctx.arcTo(x+w,y,x+w,y+h,rr);
+	ctx.arcTo(x+w,y+h,x,y+h,rr);
+	ctx.arcTo(x,y+h,x,y,rr);
+	ctx.arcTo(x,y,x+w,y,rr);
+	ctx.closePath();
+}
+function computeGhostY(grid, active, x, y){ let yy = Math.floor(y); while(!grid.collide(active.mat, x, yy+1)) yy++; return yy; }
 function tryApplyRotation(self, newMat){
 	const kicks = [0, -1, 1, -2, 2];
 	for(const dx of kicks){ if(!self.grid.collide(newMat, self.x+dx, Math.floor(self.y))){ self.active.mat = newMat; if(dx) self.x += dx; return true; } }

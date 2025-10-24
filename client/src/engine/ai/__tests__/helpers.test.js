@@ -70,12 +70,14 @@ describe('AI Helpers - Grid Analysis', () => {
 
     it('should detect multiple holes in same column', () => {
       const grid = [
-        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0], // block at col 0
+        [1, 1, 0, 0, 0, 0, 0, 0, 0, 0], // block at col 0,1
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0], // hole at col 1 (block above, empty here)
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0], // hole at col 1 (block above, empty here)
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0], // hole at col 1 (block above, empty here)
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]  // blocks everywhere
       ];
-      expect(countHoles(grid, 10, 4)).toBe(3); // 3 holes in column 1
+      expect(countHoles(grid, 10, 6)).toBe(3); // 3 holes in column 1 (rows 2,3,4)
     });
   });
 
@@ -95,8 +97,9 @@ describe('AI Helpers - Grid Analysis', () => {
         [1, 0, 0, 0, 0, 0, 0, 0, 0, 0], // col 0: height 2
         [1, 1, 0, 0, 0, 0, 0, 0, 0, 0]  // col 1: height 1
       ];
-      // bumpiness = |2-1| = 1
-      expect(bumpiness(grid, 10, 3)).toBe(1);
+      // heights: [2,1,0,0,0,0,0,0,0,0]
+      // bumpiness = |2-1| + |1-0| + |0-0| + ... = 1 + 1 + 0 + 0 + 0 + 0 + 0 + 0 + 0 = 2
+      expect(bumpiness(grid, 10, 3)).toBe(2);
     });
 
     it('should sum all adjacent differences', () => {
@@ -131,25 +134,24 @@ describe('AI Helpers - Grid Analysis', () => {
   });
 
   describe('columnDepthAt', () => {
-    it('should return 0 for empty column', () => {
+    it('should return 0 for flat surface', () => {
       const grid = [
         [0, 0, 0, 0, 0],
         [0, 0, 0, 0, 0],
-        [0, 0, 0, 0, 0]
+        [1, 1, 1, 1, 1] // all columns same height
       ];
       expect(columnDepthAt(grid, 5, 3, 2)).toBe(0);
     });
 
-    it('should calculate depth from top block to surface', () => {
+    it('should calculate well depth (how much lower than neighbors)', () => {
       const grid = [
-        [0, 0, 0, 0, 0], // surface
-        [0, 0, 0, 0, 0],
-        [0, 0, 1, 0, 0], // top block at column 2
-        [0, 0, 1, 0, 0],
-        [0, 0, 1, 0, 0]
+        [1, 0, 1, 0, 0], // col 0: h=3, col 1: h=1, col 2: h=3
+        [1, 0, 1, 0, 0], // col 1 is lower than both neighbors
+        [1, 1, 1, 0, 0]
       ];
-      // Depth from row 2 (first block) to row 0 (surface) = 2
-      expect(columnDepthAt(grid, 5, 5, 2)).toBe(2);
+      // Column 1: height = 1, left = 3, right = 3
+      // depth = max(3, 3) - 1 = 2
+      expect(columnDepthAt(grid, 5, 3, 1)).toBe(2);
     });
   });
 
@@ -163,15 +165,27 @@ describe('AI Helpers - Grid Analysis', () => {
       expect(deepWells(grid, 5, 3)).toBe(0);
     });
 
-    it('should detect wells (columns lower than both neighbors)', () => {
+    it('should return 0 for shallow wells (depth < 4)', () => {
       const grid = [
         [1, 0, 1, 0, 0], // col 0: h=3, col 1: h=1, col 2: h=3
         [1, 0, 1, 0, 0], // col 1 is a well (depth 2)
         [1, 1, 1, 0, 0]
       ];
-      // Well at col 1: both neighbors are 2 cells higher
-      // depth = min(2, 2) = 2
-      expect(deepWells(grid, 5, 3)).toBeGreaterThan(0);
+      // Well at col 1: depth = 3-1 = 2, but deepWells only counts depth >= 4
+      expect(deepWells(grid, 5, 3)).toBe(0);
+    });
+
+    it('should detect deep wells (depth >= 4)', () => {
+      const grid = [
+        [1, 0, 1, 1, 1], // col 0: h=5, col 1: h=1, col 2-4: h=5
+        [1, 0, 1, 1, 1], // col 1 is a well with neighbors at height 5
+        [1, 0, 1, 1, 1],
+        [1, 0, 1, 1, 1],
+        [1, 1, 1, 1, 1]
+      ];
+      // Only well at col 1: depth = 5-1 = 4, penalty = 4-3 = 1
+      // Other columns have same height or neighbors, no wells
+      expect(deepWells(grid, 5, 5)).toBe(1);
     });
   });
 
@@ -185,10 +199,10 @@ describe('AI Helpers - Grid Analysis', () => {
       expect(overhangs(grid, 5, 3)).toBe(0);
     });
 
-    it('should detect overhangs (empty cell with block above)', () => {
+    it('should detect overhang patterns (2x2: [filled,filled] on top, [empty,filled] below)', () => {
       const grid = [
-        [0, 1, 0, 0, 0], // block above empty cell below
-        [0, 0, 0, 0, 0], // empty cell (overhang)
+        [1, 1, 0, 0, 0], // [filled][filled]
+        [0, 1, 0, 0, 0], // [empty][filled] - overhang at (0,0)-(1,1)
         [1, 1, 1, 1, 1]
       ];
       expect(overhangs(grid, 5, 3)).toBe(1);

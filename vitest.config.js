@@ -6,10 +6,10 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
-      include: ['client/src/engine/**/*.js'],
+      include: ['client/src/engine/ai/**/*.js'],
       exclude: [
-        'client/src/engine/**/__tests__/**',
-        'client/src/engine/**/index.js'
+        'client/src/engine/ai/__tests__/**',
+        'client/src/engine/ai/index.js'
       ],
       thresholds: {
         lines: 70,

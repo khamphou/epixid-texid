@@ -14,23 +14,23 @@ export class SoloScreen extends BaseGameScreen {
   }
   async init(){
     await super.init?.();
-    // Bouton "Nouvelle partie" visible en Solo/Training
+    // "New Game" button visible in Solo/Training
     try{
       const btn = document.getElementById('btn-new');
       if(btn){ btn.classList.remove('hidden'); btn.onclick = ()=> this.restart(); }
-  // Cacher le bouton IA Training en Solo
+  // Hide AI Training button in Solo mode
   const easy = document.getElementById('easy-btn');
   const aiDD = document.getElementById('ai-dd');
   if(easy){ easy.classList.add('hidden'); easy.setAttribute('aria-expanded','false'); easy.setAttribute('aria-pressed','false'); easy.classList.remove('active','easy-prudent','easy-conservateur','easy-equilibre','easy-agressif'); }
   if(aiDD){ aiDD.classList.add('hidden'); }
     }catch{}
   this.grid = new Grid(10,20); this.bag=new Bag();
-  // Démarrage: pas de pièce active posée, elle arrivera depuis NEXT via une animation
+  // Startup: no active piece placed yet, it will come from NEXT via animation
   this.active = null;
   this.x=3; this.y=-4; this.rot=0; this.score=0; this.combo=-1; this.b2b=false; this.time=0;
-  // Vitesse et délais depuis le YAML
+  // Speed and delays from YAML
   const lockMs = this.rules?.speed?.lockDelayMs; this.lockDelay = (typeof lockMs==='number'? lockMs : 500)/1000;
-  // Gravité initiale (sera recalculée chaque frame via la gravityCurve)
+  // Initial gravity (will be recalculated each frame via gravityCurve)
   const g0 = Array.isArray(this.rules?.speed?.gravityCurve) && this.rules.speed.gravityCurve.length ? this.rules.speed.gravityCurve[0].gravity : 1;
   this.gravity = (typeof g0==='number' ? g0 : 1);
   this.dropAcc=0; this.lockTimer=0; this.holdDown=false; this._pendingLock=false;
@@ -38,99 +38,99 @@ export class SoloScreen extends BaseGameScreen {
     this.garbage = new Garbage();
     // Hold / Next
   this.hold = null; this.holdUsed = false;
-    // NEXT: on prépare 6 pièces visibles
+    // NEXT: prepare 6 visible pieces
     this.nextQueue = [spawn(this.bag), spawn(this.bag), spawn(this.bag), spawn(this.bag), spawn(this.bag), spawn(this.bag)];
-    // Audio: intensité musique
+    // Audio: music intensity
   this._musicT = 0; this._musicLevel = 0.2;
   this._stressK = 0;
   // Shake FX
   this._shake=0; this._shakeX=0; this._shakeY=0;
-  // Animation de chute rapide lors d'un hard drop
+  // Hard drop animation (fast fall)
   this._dropAnim = null;
-  // Animation HOLD (slide)
+  // HOLD animation (slide)
   this._holdAnim = null;
-  // Animation NEXT (entrée de la prochaine pièce + décalage des suivantes)
+  // NEXT animation (next piece entry + queue shift)
   this._nextAnim = null;
-  // KO au spawn: délai d'un tick avant validation
+  // Spawn KO: tick delay before validation
   this._spawnKoPending = false;
   this._spawnKoWait = false;
   this._spawnKoAnchorY = null;
   this._spawnKoDeadline = 0;
-  // Animation de premier spawn depuis NEXT
+  // Initial spawn animation from NEXT
   this._initialAnimDone = false;
   this._initialPiece = null;
-  // Solo: pas de garbage entrant par défaut
+  // Solo: no incoming garbage by default
   this._enableSoloGarbage = false;
-  // Compte à rebours 3s avant départ
+  // 3s countdown before start
   this._countdown = { start: performance.now(), dur: 3000 };
-  // Déclencher le jingle de départ (décompte)
+  // Trigger start jingle (countdown)
   try{ await audio.resume?.(); audio.playStartCue?.(3); }catch{}
-  // GO overlay bref après le décompte
+  // Brief GO overlay after countdown
   this._go = null;
   window.addEventListener('keydown', this.onKeyDown);
   window.addEventListener('keyup', this.onKeyUp);
   }
   update(dt){
-    // Même après gameOver, on laisse finir l'anim de chute visuelle; mais on fige le gameplay
+    // Even after gameOver, let visual animations finish; but freeze gameplay
     if(this.gameOver){
-      // Laisser vivre timers visuels
+      // Let visual timers live
       if(this._dropAnim){ this._dropAnim.t += dt; if(this._dropAnim.t >= this._dropAnim.dur){ this._dropAnim = null; } }
       if(this._holdAnim){ this._holdAnim.t += dt; if(this._holdAnim.t >= this._holdAnim.dur){ this._holdAnim = null; } }
       if(this._nextAnim){ this._nextAnim.t += dt; if(this._nextAnim.t >= this._nextAnim.dur){ this._nextAnim = null; } }
       super.update?.(dt);
       return;
     }
-    // Bloquer le gameplay pendant le compte à rebours
+    // Block gameplay during countdown
     if(this._countdown){
       const left = Math.max(0, this._countdown.dur - (performance.now() - this._countdown.start));
       if(left <= 0){ this._countdown = null; this._go = { start: performance.now(), dur: 450 }; }
-      // Laisser quand même vivre les toasts/overlays du parent
+      // Still let toasts/overlays from parent live
       super.update?.(dt);
       return;
     }
     // GO flash timer
     if(this._go){ if(performance.now() - this._go.start >= this._go.dur){ this._go = null; } }
     this.time+=dt; this.objectives?.tick?.(dt);
-    // Lock différé (au prochain tick)
+    // Deferred lock (next tick)
     if(this._pendingLock){
       this._pendingLock=false;
       lock(this);
       if(this.checkObjectivesAndMaybeEnd()) return;
     }
-  // Animation hard drop en cours ?
+  // Hard drop animation in progress?
     if(this._dropAnim){
       this._dropAnim.t += dt;
       if(this._dropAnim.t >= this._dropAnim.dur){ this._dropAnim = null; }
     }
-  // Animation HOLD en cours ?
+  // HOLD animation in progress?
   if(this._holdAnim){ this._holdAnim.t += dt; if(this._holdAnim.t >= this._holdAnim.dur){ this._holdAnim = null; } }
-  // Animation NEXT en cours ? (si anim initiale se termine, activer la pièce ici avant de nettoyer)
+  // NEXT animation in progress? (if initial anim ends, activate piece here before cleanup)
   if(this._nextAnim){
     this._nextAnim.t += dt;
     if(this._nextAnim.t >= this._nextAnim.dur){
       if(this._nextAnim.mode === 'initial' && !this.active){
         this.active = this._initialPiece; this._initialPiece=null; this._initialAnimDone=true;
         this.x=3; this.y=-4; this.rot=0; this.lockTimer=0; this.dropAcc=0;
-  // Armer: attendre au moins 1 descente OU 250ms max avant KO au spawn
+  // Arm grace period: wait at least 1 descent OR 250ms max before spawn KO
   this._spawnKoPending = true; this._spawnKoWait = true; this._spawnKoAnchorY = Math.floor(this.y); this._spawnKoDeadline = performance.now() + 250;
       }
       this._nextAnim = null;
     }
   }
-  // Entrées centralisées (DAS/ARR + soft drop) traitées avant la gravité
+  // Centralized inputs (DAS/ARR + soft drop) processed before gravity
   super.update?.(dt);
-  // Si aucune pièce active (au démarrage), pas de gravité
+  // If no active piece (at startup), no gravity
   if(!this.active){ return; }
-  // KO au spawn: attendre 1 frame ET le 1er pas de gravité (y > anchor) OU un time-out court
+  // Spawn KO: wait 1 frame AND first gravity step (y > anchor) OR short timeout
   if(this._spawnKoPending){
     if(this._spawnKoWait){
-      // attendre un frame complet avant de décider
+      // Wait one full frame before deciding
       this._spawnKoWait = false;
     } else {
       const now = performance.now();
       const anchor = (this._spawnKoAnchorY==null) ? Math.floor(this.y) : this._spawnKoAnchorY|0;
       const movedDown = Math.floor(this.y) > anchor;
-      if(!movedDown && now < this._spawnKoDeadline){ /* attendre */ }
+      if(!movedDown && now < this._spawnKoDeadline){ /* wait */ }
       else {
         this._spawnKoPending = false;
         if(collide(this.grid, this.active, this.x, this.y) || cannotEnterVisibleAtSpawn(this.grid, this.active, this.x, Math.floor(this.y)) ){
@@ -140,21 +140,21 @@ export class SoloScreen extends BaseGameScreen {
       }
     }
   }
-  // Appliquer la gravityCurve YAML (paliers de vitesse)
+  // Apply YAML gravityCurve (speed tiers)
   const g = this.rules?.speed?.gravityCurve||[];
   if(g.length){ const t=this.time; let cur=g[0].gravity; for(const p of g){ if(t>=p.t) cur=p.gravity; } this.gravity = (typeof cur==='number'? cur : 1); }
-  // Gravité de base; l'accélération soft drop est appliquée via onSoftDropTick()
+  // Base gravity; soft drop acceleration applied via onSoftDropTick()
   const gravityFactor = 1.6;
     this.dropAcc += dt*this.gravity*gravityFactor;
   while(this.dropAcc>=1){
       this.dropAcc-=1; this.y+=1;
       if(collide(this.grid,this.active,this.x,this.y)) {
         this.y--;
-        this._pendingLock = true; // coller au prochain tick
+        this._pendingLock = true; // lock next tick
         break;
       } else { this.lockTimer=0; }
     }
-    // garbage timers -> appliquer si écoulés (désactivé en Solo par défaut)
+    // Garbage timers -> apply if elapsed (disabled in Solo by default)
     if(this._enableSoloGarbage){
       const apply = this.garbage.tick(dt);
       if(apply>0){
@@ -172,21 +172,21 @@ export class SoloScreen extends BaseGameScreen {
         }
       }
     }
-    // Musique: adapter l'intensité — déclenche "stress" selon la hauteur de pile (>=80%)
+    // Music: adapt intensity — triggers "stress" based on stack height (>=80%)
     this._musicT += dt; if(this._musicT>=0.5){ this._musicT=0; try{
-      const hRatio = computeStackRatio(this.grid); // 0..1 (1 = rempli)
-      const stress = Math.max(0, Math.min(1, (hRatio - 0.8) / 0.2)); // 0 sous 80%, 1 à 100%
+      const hRatio = computeStackRatio(this.grid); // 0..1 (1 = full)
+      const stress = Math.max(0, Math.min(1, (hRatio - 0.8) / 0.2)); // 0 below 80%, 1 at 100%
       const g = Math.min(1, this.gravity/4);
-      const base = 0.22 + g*0.18; // fond léger + gravité
+      const base = 0.22 + g*0.18; // light background + gravity
       const target = Math.max(0.15, Math.min(1, base + stress*0.75));
       if(Math.abs(target - this._musicLevel) >= 0.05){ this._musicLevel = target; audio.setMusicIntensity?.(target); }
-      // Effet visuel lissé
+      // Smoothed visual effect
       const k = 0.5; this._stressK = this._stressK*(1-k) + stress*k;
     }catch{} }
 
   }
   render(ctx){
-    // Fond
+    // Background
     ctx.fillStyle = '#0b0f14';
     ctx.fillRect(0,0,ctx.canvas.width,ctx.canvas.height);
 
@@ -205,14 +205,14 @@ export class SoloScreen extends BaseGameScreen {
   }
 
   _calculateLayout(ctx){
-    // Layout (board + sidebar). Sidebar toujours visible: si manque de place, elle passe dessous.
+    // Layout (board + sidebar). Sidebar always visible: if space is tight, it goes below.
     const rect = ctx.canvas.getBoundingClientRect();
     const W = rect.width; const H = rect.height;
     const topbarEl = (typeof document!=='undefined') ? document.getElementById('topbar') : null;
     const topbarVisible = !!topbarEl && getComputedStyle(topbarEl).display !== 'none';
     const topbarH = topbarVisible ? (topbarEl.getBoundingClientRect().height||0) : 0;
 
-    // Mise à l'échelle responsive du plateau pour garder la sidebar à droite
+    // Responsive scaling of the board to keep sidebar on the right
     const gap = 14;
     const sideMinW = 160;
     const sideIdealW = 200;
@@ -224,7 +224,7 @@ export class SoloScreen extends BaseGameScreen {
     const boardH = this.grid.h*cell;
     const sideW = Math.max(sideMinW, Math.min(sideIdealW, W - margin*2 - boardW - gap));
     const sideH = Math.max(180, Math.min(boardH, Math.floor(H - topbarH - margin*2)));
-    // Centrer horizontalement l'ensemble board + sidebar
+    // Center horizontally the entire board + sidebar
     const totalW = boardW + gap + sideW;
     const offx = Math.max(margin, Math.floor((W - totalW)/2));
     const offy = Math.max(margin + topbarH, Math.floor((H - boardH)/2));
@@ -235,14 +235,14 @@ export class SoloScreen extends BaseGameScreen {
   }
 
   _calculateShakeJitter(){
-    // Shake léger: offsetter l'affichage du board
+    // Light shake: offset board display
     if(this._shake>0){
       this._shakeX = (Math.random()*2-1) * this._shake;
       this._shakeY = (Math.random()*2-1) * this._shake;
       this._shake = Math.max(0, this._shake - 0.4);
     } else { this._shakeX=0; this._shakeY=0; }
 
-    // Jitter léger selon le stress visuel (>~90% de pile)
+    // Light jitter based on visual stress (>~90% stack height)
     const jAmp = BaseGameScreen.jitterForStress(this._stressK||0, 2.2);
     const jx = (Math.random()*2-1) * jAmp;
     const jy = (Math.random()*2-1) * jAmp;

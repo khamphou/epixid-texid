@@ -19,28 +19,28 @@ import {
   DEFAULT_AI_PROFILE,
 } from '../config/ai-constants.js';
 
-// Écran Training: identique au Solo, avec assistance IA (Mode Easy)
+// Training Screen: identical to Solo, with AI assistance (Easy Mode)
 export class TrainingScreen extends SoloScreen {
   constructor(core, { rules, objectives }){
     super(core, { rules, objectives });
-    this.easyMode = true; // activé par défaut en Training
+    this.easyMode = true; // enabled by default in Training
     this.aiProfile = DEFAULT_AI_PROFILE; // 'prudent' | 'conservateur' | 'equilibre' | 'agressif'
     this._hint = null; // { x, rot, yLanding, score, cleared }
-  this._hintKey = null; // clé de la pièce pour laquelle l'indice est calculé (active ou HOLD)
+  this._hintKey = null; // piece key for which hint is calculated (active or HOLD)
     this._lastState = { x: null, y: null, rot: null, gridHash: null, key: null, next0: null, next1: null };
   this._hintCooldown = 0; // throttle cooldown timer (100ms)
   this._hintThrottled = false; // throttle flag to limit recomputes
-  this._hintForKey = null; // clé de la pièce pour laquelle l'indice est valide
-  this._needHintRecompute = true; // forcer un recalcul (ex: changement de profil)
-  this._hintUseHold = false; // recommander HOLD ?
-  this._holdBlinkT = 0; // timer clignotement HOLD
-  this._helpInjectedEl = null; // bloc d'aide Training
+  this._hintForKey = null; // piece key for which hint is valid
+  this._needHintRecompute = true; // force recalculation (e.g. profile change)
+  this._hintUseHold = false; // recommend HOLD?
+  this._holdBlinkT = 0; // HOLD blink timer
+  this._helpInjectedEl = null; // Training help block
   // Copilot
   this.copilotOn = false;
-  this._copilotHeldForKey = null; // éviter HOLD en boucle pour une même pièce (si on change de stratégie)
-  this._copilotLastSeqKey = null; // clé de pièce pour déclencher actions spawn/hold une fois par pièce
-  // Cooldowns d'actions Copilot (rythme humain proche des DAS/ARR)
-  this._copilotCdMs = COPILOT_CONFIG.ACTION_COOLDOWN_MS; // rotation/déplacement
+  this._copilotHeldForKey = null; // avoid HOLD loop for same piece (if strategy changes)
+  this._copilotLastSeqKey = null; // piece key to trigger spawn/hold actions once per piece
+  // Copilot action cooldowns (human-like rhythm close to DAS/ARR)
+  this._copilotCdMs = COPILOT_CONFIG.ACTION_COOLDOWN_MS; // rotation/movement
   this._copilotDropCdMs = COPILOT_CONFIG.DROP_COOLDOWN_MS; // soft drop
   this._copilotLastAct = 0;
   this._copilotLastDrop = 0;
@@ -50,14 +50,14 @@ export class TrainingScreen extends SoloScreen {
 
   async init(){
     await super.init();
-    // Afficher la topbar et le bouton Easy en Training
+    // Show topbar and Easy button in Training
     try{
       document.getElementById('topbar')?.classList.remove('hidden');
       const btn = document.getElementById('easy-btn');
       const dd = document.getElementById('ai-dd');
       if(btn && dd){
         btn.classList.remove('hidden');
-        // Charger le profil persisté
+        // Load persisted profile
         const saved = SafeStorage.getEnum('texid_ai_profile', ['off', ...AI_PROFILE_NAMES], null);
         if(saved === 'off'){
           this.easyMode = false;

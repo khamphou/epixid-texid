@@ -1,14 +1,49 @@
-// BaseGameScreen: comportement commun aux écrans de jeu (inputs, overlays, toasts, objectifs)
+/**
+ * Base class for all game screens (Solo, Training, Multiplayer).
+ *
+ * Provides common functionality:
+ * - **Input Management**: Keyboard (DAS/ARR), touch gestures (tap to rotate, drag to move, swipe down for drop)
+ * - **Event Lifecycle**: AbortController pattern for automatic cleanup
+ * - **UI Elements**: Toasts, overlays, objectives tracking
+ * - **Audio Integration**: Sound effects for moves, rotations, drops, line clears
+ * - **Gesture Detection**: Tap, drag, swipe with configurable sensitivity
+ *
+ * Subclass Contract (methods to implement):
+ * - `getBoardRect(): { x, y, w, h, cell? }` - Returns board position and cell size
+ * - `onRotate()` - Handle clockwise rotation
+ * - `onRotateCCW()` - Handle counter-clockwise rotation
+ * - `onHardDrop()` - Handle instant drop to bottom
+ * - `onMove(step)` - Handle horizontal movement (step: -1 left, +1 right)
+ * - `onSoftDropTick(dt)` - Handle soft drop (accelerated gravity)
+ * - `onLineClear(count)` [optional] - Called when lines are cleared
+ * - `onGameOver()` [optional] - Called when game ends
+ *
+ * Input System:
+ * - **DAS** (Delayed Auto Shift): Initial delay before auto-repeat (default: 140ms)
+ * - **ARR** (Auto Repeat Rate): Repeat rate during hold (default: 20ms)
+ * - **Touch**: Tap rotates, drag moves, swipe down drops
+ * - **Keyboard**: Arrow keys, Space (hard drop), Shift (hold), Z/X/Up (rotate)
+ *
+ * @property {Object} core - Game core instance
+ * @property {Object} rules - Game rules configuration (DAS, ARR, soft drop, gravity)
+ * @property {Object|null} objectives - Win conditions (lines, score, time)
+ * @property {boolean} gameOver - Game over state
+ * @property {AbortController} _abortController - For automatic event listener cleanup
+ * @property {number} _dasMs - DAS (Delayed Auto Shift) in milliseconds
+ * @property {number} _arrMs - ARR (Auto Repeat Rate) in milliseconds
+ */
 
 import { audio } from '../audio.js';
 
-/**
- * Contrat attendu côté enfant:
- * - getBoardRect(): { x:number, y:number, w:number, h:number, cell?:number }
- * - onRotate(), onHardDrop(), onMove(step:+/-1), onSoftDropTick(dt)
- * - onLineClear?(count:number), onGameOver?()
- */
 export class BaseGameScreen {
+  /**
+   * Creates a new game screen instance.
+   *
+   * @param {Object} core - Game core instance
+   * @param {Object} options - Screen configuration
+   * @param {Object} [options.rules] - Game rules (DAS, ARR, gravity, soft drop)
+   * @param {Object} [options.objectives] - Win conditions (lines to clear, target score, time limit)
+   */
   constructor(core, { rules, objectives }){
     this.core = core;
     this.rules = rules || {};

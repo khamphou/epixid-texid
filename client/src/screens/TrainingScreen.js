@@ -19,8 +19,42 @@ import {
   DEFAULT_AI_PROFILE,
 } from '../config/ai-constants.js';
 
-// Training Screen: identical to Solo, with AI assistance (Easy Mode)
+/**
+ * Training screen with AI assistance (Easy mode).
+ *
+ * Extends SoloScreen with visual projections, placement hints, and optional Copilot (auto-pilot).
+ * Uses Web Worker for background AI computation to maintain 60 FPS during hint calculation.
+ *
+ * Features:
+ * - **AI Hints**: Ghost projection showing optimal piece placement
+ * - **AI Profiles**: 'prudent', 'conservateur', 'equilibre', 'agressif' with different strategies
+ * - **Copilot Mode**: Auto-pilot that executes AI recommendations (for demonstration)
+ * - **Lookahead**: Evaluates 2-10 upcoming pieces for optimal play
+ * - **Web Worker**: Offloads AI computation to background thread (150-300ms → 0ms blocking)
+ *
+ * AI Strategy:
+ * - Lexicographic ordering: minimize new holes first, then maximize score
+ * - Evaluates all rotations and positions for current piece
+ * - Considers HOLD swap for better outcomes
+ * - Uses profile-specific weights (holes, bumpiness, height, line clears)
+ *
+ * @extends SoloScreen
+ * @property {boolean} easyMode - AI assistance enabled (default: true)
+ * @property {string} aiProfile - AI profile name: 'prudent' | 'conservateur' | 'equilibre' | 'agressif'
+ * @property {Object|null} _hint - Current AI hint: { x, rot, yLanding, score, cleared }
+ * @property {string|null} _hintKey - Piece key for which hint is calculated
+ * @property {boolean} copilotOn - Auto-pilot mode enabled
+ * @property {Worker|null} _aiWorker - Web Worker for background AI computation
+ */
 export class TrainingScreen extends SoloScreen {
+  /**
+   * Creates a new Training screen with AI assistance.
+   *
+   * @param {Object} core - Game core instance
+   * @param {Object} options - Screen configuration
+   * @param {Object} options.rules - Game rules (DAS, ARR, soft drop, gravity)
+   * @param {Object} options.objectives - Win conditions (lines, score, time)
+   */
   constructor(core, { rules, objectives }){
     super(core, { rules, objectives });
     this.easyMode = true; // enabled by default in Training
@@ -219,6 +253,18 @@ export class TrainingScreen extends SoloScreen {
     super.dispose();
   }
 
+  /**
+   * Updates training screen state including AI hints and Copilot.
+   *
+   * Called every frame (60 FPS). Handles:
+   * - Hint calculation throttling (max 10/sec)
+   * - Web Worker hint requests (non-blocking)
+   * - Copilot auto-pilot actions (DAS/ARR timing)
+   * - HOLD blink animation
+   *
+   * @param {number} dt - Delta time in seconds since last frame
+   * @override
+   */
   update(dt){
     super.update(dt);
     if(this.gameOver) return;
@@ -519,7 +565,19 @@ export class TrainingScreen extends SoloScreen {
   _stateChanged(s){ const p=this._lastState; const changed = !p || s.x!==p.x || s.y!==p.y || s.rot!==p.rot || s.gridHash!==p.gridHash || s.key!==p.key || s.next0!==p.next0 || s.next1!==p.next1; this._lastState = s; return changed; }
 
   /**
-   * Request hint calculation from Web Worker (async, non-blocking)
+   * Request hint calculation from Web Worker (async, non-blocking).
+   *
+   * Serializes grid state and sends to background thread for AI evaluation.
+   * Uses postMessage for thread communication. Falls back to sync computation on error.
+   *
+   * Worker performs:
+   * - Evaluates all rotations (0-3) and columns for current piece
+   * - Considers HOLD swap if it improves outcome
+   * - Uses lookahead (2-10 pieces) with profile-specific weights
+   * - Returns optimal placement: { x, rot, yLanding, score, cleared }
+   *
+   * @private
+   * @returns {void} Result delivered via _handleWorkerMessage callback
    */
   _requestHintFromWorker(){
     if(!this._aiWorker || !this.active) return;
@@ -552,7 +610,18 @@ export class TrainingScreen extends SoloScreen {
   }
 
   /**
-   * Handle hint result from Web Worker
+   * Handle hint result from Web Worker.
+   *
+   * Receives computed hint via postMessage callback and updates internal state.
+   * Called automatically when worker completes AI evaluation.
+   *
+   * @private
+   * @param {MessageEvent} e - Worker message event
+   * @param {string} e.data.type - Message type: 'hint-result' or 'hint-error'
+   * @param {Object} [e.data.hint] - Optimal placement: { x, rot, yLanding, score, cleared }
+   * @param {boolean} [e.data.hintUseHold] - Recommends using HOLD
+   * @param {string} [e.data.hintKey] - Piece key for which hint is valid
+   * @param {string} [e.data.error] - Error message if type is 'hint-error'
    */
   _handleWorkerMessage(e){
     const { type, hint, hintUseHold, hintKey, error } = e.data;
@@ -570,8 +639,21 @@ export class TrainingScreen extends SoloScreen {
   }
 
   /**
-   * Compute hint synchronously (fallback if worker unavailable)
-   * @deprecated Use Web Worker for better performance
+   * Compute hint synchronously (fallback if worker unavailable).
+   *
+   * Blocks main thread for 150-300ms during evaluation. Use Web Worker instead for better performance.
+   *
+   * Algorithm:
+   * 1. Evaluates all rotations (0-3) and column positions for current piece
+   * 2. Simulates placement and line clears for each candidate
+   * 3. Scores using profile weights (holes, bumpiness, height, clears)
+   * 4. Considers HOLD swap if it reduces holes or improves score
+   * 5. Uses lookahead (2-10 pieces) with diminishing weights
+   * 6. Applies lexicographic ordering: minimize new holes first, then maximize score
+   *
+   * @private
+   * @deprecated Use Web Worker (_requestHintFromWorker) for non-blocking computation
+   * @returns {void} Updates this._hint, this._hintUseHold, this._hintKey
    */
   _computeHint(){
     try {

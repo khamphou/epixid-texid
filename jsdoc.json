@@ -1,0 +1,32 @@
+{
+  "source": {
+    "include": [
+      "client/src/screens",
+      "client/src/core",
+      "client/src/engine",
+      "client/src/utils",
+      "client/src/workers"
+    ],
+    "includePattern": ".+\\.js$",
+    "excludePattern": "(node_modules|__tests__|coverage)"
+  },
+  "opts": {
+    "template": "templates/default",
+    "encoding": "utf8",
+    "destination": "./docs",
+    "recurse": true,
+    "readme": "README.md"
+  },
+  "plugins": ["plugins/markdown"],
+  "templates": {
+    "cleverLinks": true,
+    "monospaceLinks": false,
+    "default": {
+      "outputSourceFiles": true
+    }
+  },
+  "markdown": {
+    "hardwrap": false,
+    "idInHeadings": true
+  }
+}

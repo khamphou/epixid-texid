@@ -3,3 +3,5 @@ node_modules/
 .vscode/
 dist/
 leaderboard.json
+docs/
+coverage/

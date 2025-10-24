@@ -16,12 +16,15 @@
     "mod:all": "concurrently \"npm:mod:server\" \"npm:mod:client\"",
     "test": "vitest",
     "test:ui": "vitest --ui",
-    "test:coverage": "vitest --coverage"
+    "test:coverage": "vitest --coverage",
+    "docs": "jsdoc -c jsdoc.json",
+    "docs:serve": "npx http-server docs -o"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^4.0.3",
     "@vitest/ui": "^4.0.3",
     "concurrently": "^8.2.2",
+    "jsdoc": "^4.0.5",
     "vite": "^5.3.1",
     "vitest": "^4.0.3"
   },

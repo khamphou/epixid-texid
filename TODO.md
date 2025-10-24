@@ -7,7 +7,7 @@
 
 ## 🔴 CRITIQUES - À résoudre immédiatement
 
-### 1. 🐛 Problème de Superposition d'Écrans (URGENT)
+### 1. ✅ ~~Problème de Superposition d'Écrans~~ (RÉSOLU - commit 106091b)
 
 **Description** :
 Les écrans ne se "release" pas correctement lors des transitions. Le canvas reste visible par-dessus l'écran d'accueil DOM, créant des superpositions visuelles.
@@ -108,6 +108,14 @@ async init(){
 
 **Estimation** : 3-4h (Solution A recommandée)
 
+**✅ RÉSOLUTION (commit 106091b)** :
+- Ajout de `showCanvas()` et `hideCanvas()` dans ScreenManager
+- HomeScreen.init() appelle `hideCanvas()` (ligne 30)
+- BaseGameScreen.init() appelle `showCanvas()` (ligne 58)
+- MultiplayerLobbyScreen.init() appelle `showCanvas()`
+- Transitions Home ↔ Game fonctionnent correctement
+- Plus de superposition d'écrans ✅
+
 ---
 
 ### 2. ⚡ Performance - TrainingScreen IA trop lourde
@@ -155,7 +163,7 @@ _computeHint(){
 
 ---
 
-### 3. 💾 Fuites Mémoire - Event Listeners
+### 3. ✅ ~~Fuites Mémoire - Event Listeners~~ (RÉSOLU - commit f6e68fb)
 
 **Fichiers** : Tous les screens
 
@@ -197,6 +205,13 @@ class SoloScreen {
 
 **Estimation** : 2-3h (audit complet + tests)
 
+**✅ RÉSOLUTION (commit f6e68fb)** :
+- Implémentation d'AbortController dans BaseGameScreen.init()
+- 7+ event listeners avec `{ signal }` option
+- dispose() simplifié : `this._abortController?.abort()`
+- Pattern appliqué à SoloScreen, TrainingScreen, HomeScreen, MultiplayerLobbyScreen
+- Plus de fuites mémoire sur les event listeners ✅
+
 ---
 
 ### 4. 📦 Code Duplication - Helpers IA (500+ lignes)
@@ -231,7 +246,7 @@ client/src/engine/ai/
 
 ## 🟠 MAJEURS - Qualité de code
 
-### 5. 📏 Fonctions Trop Longues
+### 5. ✅ ~~Fonctions Trop Longues~~ (RÉSOLU - commits cd53b98, ab67cc2, 242a1d1)
 
 **Problèmes** :
 - `SoloScreen.render()` : **360 lignes** (187-547)
@@ -269,9 +284,16 @@ _renderBoard(ctx){
 
 **Estimation** : 4-5h
 
+**✅ RÉSOLUTION** :
+- SoloScreen.render() : 360 lignes → 18 lignes (10 helpers)
+- TrainingScreen.render() : 147 lignes → 9 lignes (4 helpers)
+- MultiplayerGameScreen.render() : 240 lignes → 15 lignes (10 helpers)
+- Décomposition en méthodes focalisées (_renderBoard, _renderSidebar, etc.)
+- Code beaucoup plus maintenable ✅
+
 ---
 
-### 6. 🔢 Magic Numbers Partout
+### 6. ✅ ~~Magic Numbers Partout~~ (RÉSOLU - commit df18d5a)
 
 **Exemples** :
 ```javascript
@@ -306,9 +328,16 @@ export const AI_CONFIG = {
 
 **Estimation** : 2-3h
 
+**✅ RÉSOLUTION (commit df18d5a)** :
+- Création de `/client/src/config/ai-constants.js`
+- Extraction des poids IA (AI_WEIGHTS avec PRUDENT, CONSERVATEUR, EQUILIBRE, AGRESSIF)
+- Extraction des cooldowns (COPILOT_ACTION_COOLDOWN_MS, COPILOT_DROP_COOLDOWN_MS)
+- Documentation inline des valeurs magiques
+- Code plus compréhensible et maintenable ✅
+
 ---
 
-### 7. 🌍 Mélange Langue FR/EN
+### 7. ✅ ~~Mélange Langue FR/EN~~ (RÉSOLU - commit ab67cc2)
 
 **Problème** :
 ```javascript
@@ -334,9 +363,15 @@ this._holdBlinkTime = 0;  // Blinking timer for HOLD panel
 
 **Estimation** : 3-4h
 
+**✅ RÉSOLUTION (commit ab67cc2)** :
+- Traduction de tous les commentaires français → anglais
+- Variables et fonctions maintenues en anglais
+- Textes UI (visibles pour l'utilisateur) gardés en français
+- Cohérence dans tout le codebase ✅
+
 ---
 
-### 8. 🔒 Sécurité localStorage
+### 8. ✅ ~~Sécurité localStorage~~ (RÉSOLU - commit 6fc1eb9)
 
 **Problème** :
 ```javascript
@@ -383,6 +418,13 @@ const profile = SafeStorage.get(
 ```
 
 **Estimation** : 2h
+
+**✅ RÉSOLUTION (commit 6fc1eb9 - Quick Win C)** :
+- Création de wrapper `safeGetStorage(key, fallback)`
+- Validation des valeurs localStorage avant utilisation
+- Protection contre corruption/injection
+- Try/catch autour de tous les accès localStorage
+- Plus de risque de valeurs corrompues ✅
 
 ---
 

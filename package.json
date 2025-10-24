@@ -4,24 +4,30 @@
   "private": true,
   "type": "module",
   "scripts": {
-  "dev": "vite --open",
-  "build": "vite build",
-  "preview": "vite preview --open",
-  "server": "node server.js",
-  "dev:all": "concurrently \"npm:server\" \"npm:dev\"",
-  "start": "npm run build && node server.js",
-  "gen:music": "node ./tools/gen-mp3.js",
-  "mod:server": "npm --prefix server run dev",
-  "mod:client": "vite client --open --port 5175",
-  "mod:all": "concurrently \"npm:mod:server\" \"npm:mod:client\""
+    "dev": "vite --open",
+    "build": "vite build",
+    "preview": "vite preview --open",
+    "server": "node server.js",
+    "dev:all": "concurrently \"npm:server\" \"npm:dev\"",
+    "start": "npm run build && node server.js",
+    "gen:music": "node ./tools/gen-mp3.js",
+    "mod:server": "npm --prefix server run dev",
+    "mod:client": "vite client --open --port 5175",
+    "mod:all": "concurrently \"npm:mod:server\" \"npm:mod:client\"",
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "test:coverage": "vitest --coverage"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "^4.0.3",
+    "@vitest/ui": "^4.0.3",
+    "concurrently": "^8.2.2",
     "vite": "^5.3.1",
-    "concurrently": "^8.2.2"
+    "vitest": "^4.0.3"
   },
   "dependencies": {
     "express": "^4.19.2",
-  "ws": "^8.17.0",
-  "zod": "^3.23.8"
+    "ws": "^8.17.0",
+    "zod": "^3.23.8"
   }
 }

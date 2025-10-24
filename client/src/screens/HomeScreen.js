@@ -21,6 +21,10 @@ export class HomeScreen{
   async init(){
     // Si l'accueil DOM (hero) est présent, on ne crée pas de drawer ni de raccourcis ici
     this.domHome = document.getElementById('screen-start');
+
+    // Always hide canvas and show DOM hero when on HomeScreen
+    this.core.sm.hideCanvas();
+
     if(!this.domHome){
       window.addEventListener('keydown', this._onKey);
       this.drawer = document.createElement('div');

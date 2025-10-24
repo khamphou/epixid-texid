@@ -47,6 +47,10 @@ export class BaseGameScreen {
 
   async init(){
   this._alive = true;
+
+    // Show canvas and hide DOM hero when entering game screen
+    this.core.sm.showCanvas();
+
     // Entrées clavier
     window.addEventListener('keydown', this._kbHandlers.keydown);
     window.addEventListener('keyup', this._kbHandlers.keyup);
@@ -311,13 +315,8 @@ export class BaseGameScreen {
   }
 
   navigateHome(){
-    // Revenir à l’accueil DOM via main.js
-    try{
-      document.getElementById('screen-start')?.classList.add('active');
-      document.getElementById('topbar')?.classList.add('hidden');
-      this.core.sm.clear();
-      // bouton Exit existant fait déjà la remise à zéro propre
-    }catch{}
+    // Return to home via Exit button (which clears stack and pushes HomeScreen)
+    // Canvas/DOM visibility is managed by HomeScreen.init()
     try{ document.getElementById('btn-exit')?.click(); }catch{}
   }
 

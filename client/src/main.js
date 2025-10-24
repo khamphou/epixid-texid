@@ -58,18 +58,14 @@ function bindHomeDOM(){
     try{ audio.setMusicIntensity?.(0.25); }catch{}
   }
   function navigateToCanvas(){
-    // Masquer le hero DOM pour laisser le canvas occuper la page
-    const hero = document.getElementById('screen-start');
-    hero?.classList.remove('active');
-    document.getElementById('topbar')?.classList.remove('hidden');
-    // Afficher le canvas du ScreenManager
-  try{ core.sm.canvas.style.display = 'block'; core.sm.canvas.style.pointerEvents = 'auto'; }catch{}
-  }
-  async function startTraining(){
-    navigateToCanvas();
+    // Stop hero animation and close any open UI
+    // (Canvas/DOM visibility is now managed by screens themselves)
     try{ stopHero?.(); stopHero = null; }catch{}
     try{ document.getElementById('drawer-credits')?.classList.remove('open'); }catch{}
     try{ document.getElementById('dlg-top10')?.close?.(); }catch{}
+  }
+  async function startTraining(){
+    navigateToCanvas();
     // Charger un mode d'entraînement réel pour obtenir des règles avec attackFor
     try{
       const { rules, objectives } = await core.loadMode('daily_tspin_rush', { multiplayer:false });
@@ -88,7 +84,6 @@ function bindHomeDOM(){
   }
   async function startMulti(){
     navigateToCanvas();
-    try{ stopHero?.(); stopHero = null; }catch{}
     // Pousser le Lobby multi
     const mod = await import('./screens/MultiplayerLobbyScreen.js');
     core.sm.replace(new mod.MultiplayerLobbyScreen(core));
@@ -132,15 +127,10 @@ function bindTopbar(){
   }
   function escapeHtml(s){ return String(s).replace(/[&<>"]/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
   btnExit?.addEventListener('click', ()=> {
-    // Retour à l’accueil
-    document.getElementById('screen-start')?.classList.add('active');
-    document.getElementById('topbar')?.classList.add('hidden');
-    // Vide le stack et remet HomeScreen par défaut
+    // Return to home (canvas/DOM visibility managed by HomeScreen)
     core.sm.clear();
     core.sm.push(new HomeScreen(core));
-    // Masquer le canvas quand on revient à l’accueil DOM
-    try{ core.sm.canvas.style.display = 'none'; core.sm.canvas.style.pointerEvents = 'none'; }catch{}
-    // Relancer l'animation du hero et forcer un resize après ré-affichage
+    // Restart hero animation
     try{ stopHero?.(); }catch{}
     try{ stopHero = initHero(); }catch{}
     try{ requestAnimationFrame(()=> window.dispatchEvent(new Event('resize'))); }catch{}
@@ -155,6 +145,5 @@ core.boot().then(()=>{
   // Animation hero (si présente dans le DOM)
   stopHero = initHero();
   // Audio: booté après geste utilisateur (voir resumeOnUser)
-  // Par défaut, si le hero DOM est visible, masquer le canvas de rendu
-  try{ core.sm.canvas.style.display = 'none'; }catch{}
+  // Canvas visibility is now managed by ScreenManager constructor
 });

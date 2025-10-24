@@ -16,6 +16,9 @@ export class MultiplayerLobbyScreen{
 		this._key = (e)=> this.onKey(e);
 	}
 	async init(){
+		// Show canvas and hide DOM hero when entering lobby
+		this.core.sm.showCanvas();
+
 		// Connexion WS
 		const url = wsUrl();
 		this.ws = new RealtimeClient();

@@ -10,6 +10,9 @@ export class ScreenManager{
     this.ctx = this.canvas.getContext('2d');
     this.root.appendChild(this.canvas);
     this.stack = [];
+    // Hide canvas by default (DOM hero screen is shown first)
+    this.canvas.style.display = 'none';
+    this.canvas.style.pointerEvents = 'none';
     this.resize();
     window.addEventListener('resize', ()=> this.resize());
   }
@@ -34,4 +37,26 @@ export class ScreenManager{
   render(){ const ctx = this.ctx; if(!ctx) return; ctx.clearRect(0,0,this.canvas.width, this.canvas.height); this.top()?.render?.(ctx); }
   handleInput(evt){ return this.top()?.handleInput?.(evt); }
   top(){ return this.stack[this.stack.length-1]; }
+
+  /**
+   * Show canvas and hide DOM hero screen.
+   * Called when transitioning to canvas-based screens (game, lobby, etc.)
+   */
+  showCanvas(){
+    this.canvas.style.display = 'block';
+    this.canvas.style.pointerEvents = 'auto';
+    try{ document.getElementById('screen-start')?.classList.remove('active'); }catch{}
+    try{ document.getElementById('topbar')?.classList.remove('hidden'); }catch{}
+  }
+
+  /**
+   * Hide canvas and show DOM hero screen.
+   * Called when returning to home screen.
+   */
+  hideCanvas(){
+    this.canvas.style.display = 'none';
+    this.canvas.style.pointerEvents = 'none';
+    try{ document.getElementById('screen-start')?.classList.add('active'); }catch{}
+    try{ document.getElementById('topbar')?.classList.add('hidden'); }catch{}
+  }
 }

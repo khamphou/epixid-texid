@@ -187,9 +187,24 @@ export class SoloScreen extends BaseGameScreen {
   }
   render(ctx){
     // Fond
-  ctx.fillStyle = '#0b0f14';
-  ctx.fillRect(0,0,ctx.canvas.width,ctx.canvas.height);
+    ctx.fillStyle = '#0b0f14';
+    ctx.fillRect(0,0,ctx.canvas.width,ctx.canvas.height);
 
+    const layout = this._calculateLayout(ctx);
+    const shake = this._calculateShakeJitter();
+
+    this._renderBoard(ctx, layout, shake);
+    this._renderDropAnimation(ctx, layout);
+    this._renderSidebar(ctx, layout, shake);
+    this._renderNextQueue(ctx, layout, shake);
+    this._renderOverlays(ctx, layout);
+    super.render?.(ctx);
+    this._renderHoldAnimation(ctx);
+    this._renderNextAnimation(ctx);
+    this._renderCountdown(ctx, layout);
+  }
+
+  _calculateLayout(ctx){
     // Layout (board + sidebar). Sidebar toujours visible: si manque de place, elle passe dessous.
     const rect = ctx.canvas.getBoundingClientRect();
     const W = rect.width; const H = rect.height;
@@ -197,58 +212,80 @@ export class SoloScreen extends BaseGameScreen {
     const topbarVisible = !!topbarEl && getComputedStyle(topbarEl).display !== 'none';
     const topbarH = topbarVisible ? (topbarEl.getBoundingClientRect().height||0) : 0;
 
-  // Mise à l'échelle responsive du plateau pour garder la sidebar à droite
-  const gap = 14;
-  const sideMinW = 160;
-  const sideIdealW = 200;
-  const margin = 12;
-  const maxCellW = Math.floor((W - margin*2 - gap - sideMinW) / this.grid.w);
-  const maxCellH = Math.floor((H - margin*2 - topbarH) / this.grid.h);
-  const cell = Math.max(12, Math.min(30, Math.min(maxCellW, maxCellH)));
-  const boardW = this.grid.w*cell;
-  const boardH = this.grid.h*cell;
-  const sideW = Math.max(sideMinW, Math.min(sideIdealW, W - margin*2 - boardW - gap));
-  const sideH = Math.max(180, Math.min(boardH, Math.floor(H - topbarH - margin*2)));
-  // Centrer horizontalement l'ensemble board + sidebar
-  const totalW = boardW + gap + sideW;
-  const offx = Math.max(margin, Math.floor((W - totalW)/2));
-  const offy = Math.max(margin + topbarH, Math.floor((H - boardH)/2));
-  const sideX = offx + boardW + gap; const sideY = offy;
+    // Mise à l'échelle responsive du plateau pour garder la sidebar à droite
+    const gap = 14;
+    const sideMinW = 160;
+    const sideIdealW = 200;
+    const margin = 12;
+    const maxCellW = Math.floor((W - margin*2 - gap - sideMinW) / this.grid.w);
+    const maxCellH = Math.floor((H - margin*2 - topbarH) / this.grid.h);
+    const cell = Math.max(12, Math.min(30, Math.min(maxCellW, maxCellH)));
+    const boardW = this.grid.w*cell;
+    const boardH = this.grid.h*cell;
+    const sideW = Math.max(sideMinW, Math.min(sideIdealW, W - margin*2 - boardW - gap));
+    const sideH = Math.max(180, Math.min(boardH, Math.floor(H - topbarH - margin*2)));
+    // Centrer horizontalement l'ensemble board + sidebar
+    const totalW = boardW + gap + sideW;
+    const offx = Math.max(margin, Math.floor((W - totalW)/2));
+    const offy = Math.max(margin + topbarH, Math.floor((H - boardH)/2));
+    const sideX = offx + boardW + gap;
+    const sideY = offy;
 
-    // Shake léger: offsetter l’affichage du board
+    return { boardW, boardH, offx, offy, cell, sideX, sideY, sideW, sideH };
+  }
+
+  _calculateShakeJitter(){
+    // Shake léger: offsetter l'affichage du board
     if(this._shake>0){
       this._shakeX = (Math.random()*2-1) * this._shake;
       this._shakeY = (Math.random()*2-1) * this._shake;
       this._shake = Math.max(0, this._shake - 0.4);
     } else { this._shakeX=0; this._shakeY=0; }
 
-  // Jitter léger selon le stress visuel (>~90% de pile)
-  const jAmp = BaseGameScreen.jitterForStress(this._stressK||0, 2.2);
-  const jx = (Math.random()*2-1) * jAmp;
-  const jy = (Math.random()*2-1) * jAmp;
-  const bx = offx + this._shakeX + jx;
-  const by = offy + this._shakeY + jy;
+    // Jitter léger selon le stress visuel (>~90% de pile)
+    const jAmp = BaseGameScreen.jitterForStress(this._stressK||0, 2.2);
+    const jx = (Math.random()*2-1) * jAmp;
+    const jy = (Math.random()*2-1) * jAmp;
 
-  // Cadre verre du plateau (glow si stress + heartbeat + flash nuke)
-  let nukeGlow = 0; if(this._nuke){ const k = Math.max(0, Math.min(1, (performance.now() - this._nuke.start)/this._nuke.dur)); nukeGlow = 1 - k; }
-  drawGlassFrame(ctx, bx-14, by-14, boardW+28, boardH+28, this._stressK||0, this.time||0, nukeGlow);
+    return { jx, jy, shakeX: this._shakeX, shakeY: this._shakeY };
+  }
+
+  _renderBoard(ctx, layout, shake){
+    const { boardW, boardH, offx, offy, cell } = layout;
+    const { jx, jy, shakeX, shakeY } = shake;
+    const bx = offx + shakeX + jx;
+    const by = offy + shakeY + jy;
+
+    // Cadre verre du plateau (glow si stress + heartbeat + flash nuke)
+    let nukeGlow = 0;
+    if(this._nuke){
+      const k = Math.max(0, Math.min(1, (performance.now() - this._nuke.start)/this._nuke.dur));
+      nukeGlow = 1 - k;
+    }
+    drawGlassFrame(ctx, bx-14, by-14, boardW+28, boardH+28, this._stressK||0, this.time||0, nukeGlow);
     drawInnerFrame(ctx, bx, by, boardW, boardH);
 
     // Grille
     drawGrid(ctx, bx, by, this.grid.w, this.grid.h, cell);
+
     // Ghost piece (si active existe)
     if(this.active){
       const ghostY = computeGhostY(this.grid, this.active, this.x, this.y);
       const mat=this.active.mat; const y0=ghostY; const x0=this.x;
       for(let j=0;j<4;j++){
         for(let i=0;i<4;i++){
-          if(!mat[j][i]) continue; const gx=x0+i, gy=y0+j; if(gx<0||gx>=this.grid.w) continue;
-          const px=bx+gx*cell, py=by+gy*cell; ctx.save(); ctx.globalAlpha = (gy<0? 0.35 : 0.75);
+          if(!mat[j][i]) continue;
+          const gx=x0+i, gy=y0+j;
+          if(gx<0||gx>=this.grid.w) continue;
+          const px=bx+gx*cell, py=by+gy*cell;
+          ctx.save();
+          ctx.globalAlpha = (gy<0? 0.35 : 0.75);
           drawGhostCell(ctx, px, py, cell);
           ctx.restore();
         }
       }
     }
+
     // Tuiles posées (masquer temporairement celles de la pièce verrouillée si une anim de drop est en cours)
     let hideSet = null;
     if(this._dropAnim){
@@ -264,59 +301,90 @@ export class SoloScreen extends BaseGameScreen {
         }
       }
     }
+
     // Pièce active (si présente)
     if(this.active){
-      const mat = this.active.mat; const y0 = Math.floor(this.y); const x0 = this.x; const color = pieceColor(this.active.key);
+      const mat = this.active.mat;
+      const y0 = Math.floor(this.y);
+      const x0 = this.x;
+      const color = pieceColor(this.active.key);
       for(let j=0;j<4;j++){
         for(let i=0;i<4;i++){
           if(!mat[j][i]) continue;
-          const gy = y0 + j; const gx = x0 + i; if(gx<0||gx>=this.grid.w) continue;
+          const gy = y0 + j; const gx = x0 + i;
+          if(gx<0||gx>=this.grid.w) continue;
           const px = bx + gx*cell; const py = by + gy*cell;
-          ctx.save(); if(gy < 0){ ctx.globalAlpha = BaseGameScreen.alphaAboveBoard(this.time||0, 0.6); }
+          ctx.save();
+          if(gy < 0){ ctx.globalAlpha = BaseGameScreen.alphaAboveBoard(this.time||0, 0.6); }
           drawTile(ctx, px, py, cell, color);
           ctx.restore();
         }
       }
     }
 
-    // Animation de chute rapide (overlay) – pièce précédente interpolée entre yStart -> yEnd avec léger motion blur
-    if(this._dropAnim){
-      const a = this._dropAnim;
-      const k = Math.min(1, a.t / a.dur);
-      const kk = easeOutCubic(k);
-      const yInterp = a.yStart + (a.yEnd - a.yStart) * kk;
-      const trailCount = 2; // plus léger
-      const dyTotal = Math.max(0, (yInterp - a.yStart));
-      const trailStep = dyTotal / (trailCount+1);
-      for(let j=0;j<4;j++){
-        for(let i=0;i<4;i++){
-          if(!a.mat[j][i]) continue;
-          const gx = a.x + i; if(gx<0||gx>=this.grid.w) continue;
-          // couche principale
-          const yMain = yInterp + j;
-          let px = bx + gx*cell, py = by + yMain*cell;
-          ctx.save(); ctx.globalAlpha = 0.92; drawTile(ctx, px, py, cell, a.color); ctx.restore();
-          // trails
-          for(let t=1;t<=trailCount;t++){
-            const yTrail = (yInterp - t*trailStep) + j;
-            px = bx + gx*cell; py = by + yTrail*cell;
-            ctx.save(); ctx.globalAlpha = 0.12 * (1 - t/(trailCount+0.5)); drawTile(ctx, px, py, cell, a.color); ctx.restore();
-          }
+    // Légende sous plateau
+    ctx.fillStyle = '#b6c2cf'; ctx.font = '12px system-ui,Segoe UI,Roboto,Arial';
+    ctx.textAlign='center'; ctx.fillText('kham', bx+boardW/2, by+boardH+22);
+    ctx.textAlign='left';
+
+    // Enregistrer le rect du board pour les animations
+    this._boardRect = { x:bx, y:by, w:boardW, h:boardH, cell };
+  }
+
+  _renderDropAnimation(ctx, layout){
+    if(!this._dropAnim) return;
+
+    const { offx, offy, cell } = layout;
+    const bx = offx + (this._shakeX||0);
+    const by = offy + (this._shakeY||0);
+
+    const a = this._dropAnim;
+    const k = Math.min(1, a.t / a.dur);
+    const kk = easeOutCubic(k);
+    const yInterp = a.yStart + (a.yEnd - a.yStart) * kk;
+    const trailCount = 2;
+    const dyTotal = Math.max(0, (yInterp - a.yStart));
+    const trailStep = dyTotal / (trailCount+1);
+
+    for(let j=0;j<4;j++){
+      for(let i=0;i<4;i++){
+        if(!a.mat[j][i]) continue;
+        const gx = a.x + i;
+        if(gx<0||gx>=this.grid.w) continue;
+
+        // Couche principale
+        const yMain = yInterp + j;
+        let px = bx + gx*cell, py = by + yMain*cell;
+        ctx.save();
+        ctx.globalAlpha = 0.92;
+        drawTile(ctx, px, py, cell, a.color);
+        ctx.restore();
+
+        // Trails
+        for(let t=1;t<=trailCount;t++){
+          const yTrail = (yInterp - t*trailStep) + j;
+          px = bx + gx*cell; py = by + yTrail*cell;
+          ctx.save();
+          ctx.globalAlpha = 0.12 * (1 - t/(trailCount+0.5));
+          drawTile(ctx, px, py, cell, a.color);
+          ctx.restore();
         }
       }
     }
+  }
 
-    // Légende sous plateau
-  ctx.fillStyle = '#b6c2cf'; ctx.font = '12px system-ui,Segoe UI,Roboto,Arial';
-  ctx.textAlign='center'; ctx.fillText('kham', bx+boardW/2, by+boardH+22);
-    ctx.textAlign='left';
+  _renderSidebar(ctx, layout, shake){
+    const { sideX, sideY, sideW, sideH, boardW, boardH, offx, offy, cell } = layout;
+    const { jx, jy } = shake;
 
-  // Sidebar (toujours visible) — applique aussi le shake/jitter
-    const sdx = this._shakeX + jx;
-    const sdy = this._shakeY + jy;
+    // Sidebar (toujours visible) — applique aussi le shake/jitter
+    const sdx = (this._shakeX||0) + jx;
+    const sdy = (this._shakeY||0) + jy;
+
     ctx.save();
     ctx.translate(sdx, sdy);
     drawPanelGlass(ctx, sideX, sideY, sideW, sideH);
+
     const playerName = SafeStorage.getString('texid_name', 16, 'Player');
     drawLabelValue(ctx, sideX+12, sideY+22, 'Joueur', playerName, false, sideW);
     drawLabelValue(ctx, sideX+12, sideY+40, 'Niveau', 'Pepouz', false, sideW);
@@ -324,28 +392,55 @@ export class SoloScreen extends BaseGameScreen {
     drawLabelValue(ctx, sideX+12, sideY+76, 'Lignes', String(this.scoring?.lines||0), false, sideW);
 
     // Sous-panneaux: HOLD (au-dessus, réduit) puis NEXT en dessous
-  const holdTop = sideY + 96;
-    const holdH = 90; // réduit
+    const holdTop = sideY + 96;
+    const holdH = 90;
     const nextTop = holdTop + holdH + 12;
     const nextH = Math.max(120, Math.min(sideH - (nextTop - sideY) - 12, 160));
-  drawSubPanel(ctx, sideX+10, holdTop, sideW-20, holdH);
-  // Exposer le rect du panneau HOLD pour l'assistance visuelle Training
-  this._holdPanel = { x: sideX+10, y: holdTop, w: sideW-20, h: holdH };
+
+    drawSubPanel(ctx, sideX+10, holdTop, sideW-20, holdH);
+    // Exposer le rect du panneau HOLD pour l'assistance visuelle Training
+    this._holdPanel = { x: sideX+10, y: holdTop, w: sideW-20, h: holdH };
     drawSubPanel(ctx, sideX+10, nextTop, sideW-20, nextH);
+
     // Labels
     ctx.fillStyle='#94a3b8'; ctx.font='bold 12px system-ui,Segoe UI,Roboto';
-    ctx.textAlign='left'; ctx.fillText('HOLD', sideX+18, holdTop+16);
-    ctx.textAlign='left'; ctx.fillText('NEXT', sideX+18, nextTop+16);
-    // HOLD contenu (plus petit) + mémoriser l’ancre pour anim
-    const cellH = 16; const holdX = sideX + Math.floor((sideW - 20 - cellH*4)/2) + 10; const holdY = holdTop + 26;
+    ctx.textAlign='left';
+    ctx.fillText('HOLD', sideX+18, holdTop+16);
+    ctx.fillText('NEXT', sideX+18, nextTop+16);
+
+    // HOLD contenu (plus petit) + mémoriser l'ancre pour anim
+    const cellH = 16;
+    const holdX = sideX + Math.floor((sideW - 20 - cellH*4)/2) + 10;
+    const holdY = holdTop + 26;
     this._holdDraw = { x: holdX, y: holdY, cell: cellH };
-  if(this.hold){ drawMat(ctx, this.hold.mat, holdX, holdY, cellH, pieceColor(this.hold.key)); }
-  ctx.restore();
-  // Enregistrer le rect du board tôt pour l’anim initiale potentielle
-  this._boardRect = { x:bx, y:by, w:boardW, h:boardH, cell };
-  // NEXT contenu: séparé par un trait — en haut: prochaine pièce (grande), en bas: anneau des suivantes (20% plus petites à chaque pas)
-    // Appliquer le shake/jitter aussi autour de la zone NEXT
-    ctx.save(); ctx.translate(sdx, sdy);
+    if(this.hold){
+      drawMat(ctx, this.hold.mat, holdX, holdY, cellH, pieceColor(this.hold.key));
+    }
+
+    ctx.restore();
+
+    // Garbage badge
+    const incoming = this.garbage?.incoming||0;
+    if(incoming>0){
+      drawDangerBadge(ctx, offx+boardW-10, offy-10, incoming);
+    }
+  }
+
+  _renderNextQueue(ctx, layout, shake){
+    const { sideX, sideY, sideW, sideH } = layout;
+    const { jx, jy } = shake;
+    const sdx = (this._shakeX||0) + jx;
+    const sdy = (this._shakeY||0) + jy;
+
+    // Calculate panel dimensions
+    const holdTop = sideY + 96;
+    const holdH = 90;
+    const nextTop = holdTop + holdH + 12;
+    const nextH = Math.max(120, Math.min(sideH - (nextTop - sideY) - 12, 160));
+
+    // NEXT contenu: séparé par un trait — en haut: prochaine pièce (grande), en bas: anneau des suivantes
+    ctx.save();
+    ctx.translate(sdx, sdy);
     this._nextHit = null; this._nextDraw = undefined; this._nextTop = null; this._nextRing = [];
     {
     const showCount = Math.min(6, this.nextQueue.length);
@@ -460,94 +555,117 @@ export class SoloScreen extends BaseGameScreen {
         this.nextQueue.push(spawn(this.bag));
         if(items.length){ this._nextAnim = { t:0, dur:0.18, items, mode:'initial' }; }
       }
+    }
+    ctx.restore();
   }
-  ctx.restore();
 
-    // Garbage badge
-    const incoming = this.garbage?.incoming||0;
-  if(incoming>0){ drawDangerBadge(ctx, bx+boardW-10, by-10, incoming); }
+  _renderOverlays(ctx, layout){
+    // Overlays from parent are rendered by super.render() in main render()
+  }
 
-  // Overlays du parent (toasts, game over)
-    super.render?.(ctx);
-    // Animation HOLD (slide entre plateau et panneau HOLD)
-    if(this._holdAnim){
-      const a = this._holdAnim; const k = Math.min(1, a.t/a.dur); const kk = easeOutCubic(k);
-      const lerp = (v0,v1)=> v0 + (v1-v0)*kk;
-      if(a.fromActive){
-        const x = lerp(a.fromActive.x0, a.fromActive.x1);
-        const y = lerp(a.fromActive.y0, a.fromActive.y1);
-        const c = lerp(a.fromActive.c0, a.fromActive.c1);
-        drawMat(ctx, a.fromActive.mat, x, y, c, a.fromActive.color);
-      }
-      if(a.fromHold){
-        const x = lerp(a.fromHold.x0, a.fromHold.x1);
-        const y = lerp(a.fromHold.y0, a.fromHold.y1);
-        const c = lerp(a.fromHold.c0, a.fromHold.c1);
-        drawMat(ctx, a.fromHold.mat, x, y, c, a.fromHold.color);
-      }
-      if(a.fromNext){
-        const x = lerp(a.fromNext.x0, a.fromNext.x1);
-        const y = lerp(a.fromNext.y0, a.fromNext.y1);
-        const c = lerp(a.fromNext.c0, a.fromNext.c1);
-        drawMat(ctx, a.fromNext.mat, x, y, c, a.fromNext.color);
-      }
+  _renderHoldAnimation(ctx){
+    if(!this._holdAnim) return;
+
+    const a = this._holdAnim;
+    const k = Math.min(1, a.t/a.dur);
+    const kk = easeOutCubic(k);
+    const lerp = (v0,v1)=> v0 + (v1-v0)*kk;
+
+    if(a.fromActive){
+      const x = lerp(a.fromActive.x0, a.fromActive.x1);
+      const y = lerp(a.fromActive.y0, a.fromActive.y1);
+      const c = lerp(a.fromActive.c0, a.fromActive.c1);
+      drawMat(ctx, a.fromActive.mat, x, y, c, a.fromActive.color);
     }
-    // Animation NEXT (overlay) – la 1ère glisse vers le spawn, les autres prennent sa place
-    if(this._nextAnim){
-      const a = this._nextAnim; const k = Math.min(1, a.t/a.dur); const kk = easeOutCubic(k);
-      const lerp = (v0,v1)=> v0 + (v1-v0)*kk;
-      for(const it of a.items){
-        const x = lerp(it.x0, it.x1);
-        const y = lerp(it.y0, it.y1);
-        const c = lerp(it.c0, it.c1);
-        drawMat(ctx, it.mat, x, y, c, it.color);
-      }
+    if(a.fromHold){
+      const x = lerp(a.fromHold.x0, a.fromHold.x1);
+      const y = lerp(a.fromHold.y0, a.fromHold.y1);
+      const c = lerp(a.fromHold.c0, a.fromHold.c1);
+      drawMat(ctx, a.fromHold.mat, x, y, c, a.fromHold.color);
     }
+    if(a.fromNext){
+      const x = lerp(a.fromNext.x0, a.fromNext.x1);
+      const y = lerp(a.fromNext.y0, a.fromNext.y1);
+      const c = lerp(a.fromNext.c0, a.fromNext.c1);
+      drawMat(ctx, a.fromNext.mat, x, y, c, a.fromNext.color);
+    }
+  }
+
+  _renderNextAnimation(ctx){
+    if(!this._nextAnim) return;
+
+    const a = this._nextAnim;
+    const k = Math.min(1, a.t/a.dur);
+    const kk = easeOutCubic(k);
+    const lerp = (v0,v1)=> v0 + (v1-v0)*kk;
+
+    for(const it of a.items){
+      const x = lerp(it.x0, it.x1);
+      const y = lerp(it.y0, it.y1);
+      const c = lerp(it.c0, it.c1);
+      drawMat(ctx, it.mat, x, y, c, it.color);
+    }
+  }
+
+  _renderCountdown(ctx, layout){
+    const { boardW, boardH, offx, offy } = layout;
+    const bx = offx + (this._shakeX||0);
+    const by = offy + (this._shakeY||0);
+
     // Compte à rebours (3,2,1) avec bounce/zoom + glow + couleurs vives
     if(this._countdown){
       const left = Math.max(0, this._countdown.dur - (performance.now() - this._countdown.start));
-      const n = Math.max(1, Math.ceil(left/1000)); // affiche 3..2..1
-      const msInBucket = (1000 - (left % 1000)) % 1000; // 0->999 pour chaque chiffre
+      const n = Math.max(1, Math.ceil(left/1000));
+      const msInBucket = (1000 - (left % 1000)) % 1000;
       const p = Math.min(1, msInBucket/1000);
-      const s = 0.6 + 0.6*easeOutBack(p); // 0.6 -> 1.2 avec overshoot
-      const cx = bx + boardW/2; const cy = by + boardH*(1/3);
-      // Couleurs vives par chiffre
+      const s = 0.6 + 0.6*easeOutBack(p);
+      const cx = bx + boardW/2;
+      const cy = by + boardH*(1/3);
       const palette = { 3:'#22d3ee', 2:'#a78bfa', 1:'#fbbf24' };
       const col = palette[n] || '#22d3ee';
+
       ctx.save();
       ctx.translate(cx, cy);
       ctx.scale(s, s);
-      ctx.textAlign='center'; ctx.textBaseline='middle';
-      // Glow
-      ctx.shadowColor = col; ctx.shadowBlur = 28;
-      // Contour
-      ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+      ctx.textAlign='center';
+      ctx.textBaseline='middle';
+      ctx.shadowColor = col;
+      ctx.shadowBlur = 28;
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = 'rgba(0,0,0,0.55)';
       ctx.font='bold 72px Orbitron, system-ui';
       ctx.strokeText(String(n), 0, 0);
-      // Remplissage
       ctx.fillStyle = col;
       ctx.fillText(String(n), 0, 0);
       ctx.restore();
     }
+
     // Flash "GO" bref après le décompte
     if(!this._countdown && this._go){
-      const cx2 = bx + boardW/2; const cy2 = by + boardH*(1/3);
+      const cx2 = bx + boardW/2;
+      const cy2 = by + boardH*(1/3);
       const p = Math.min(1, (performance.now() - this._go.start)/this._go.dur);
       const s = 0.9 + 0.3*easeOutBack(p);
       const col = '#34d399';
+
       ctx.save();
       ctx.translate(cx2, cy2);
       ctx.scale(s, s);
-      ctx.textAlign='center'; ctx.textBaseline='middle';
-      ctx.shadowColor = col; ctx.shadowBlur = 22;
-      ctx.lineWidth = 5; ctx.strokeStyle='rgba(0,0,0,0.55)';
+      ctx.textAlign='center';
+      ctx.textBaseline='middle';
+      ctx.shadowColor = col;
+      ctx.shadowBlur = 22;
+      ctx.lineWidth = 5;
+      ctx.strokeStyle='rgba(0,0,0,0.55)';
       ctx.font='bold 60px Orbitron, system-ui';
       ctx.strokeText('GO', 0, 0);
-      ctx.fillStyle = col; ctx.fillText('GO', 0, 0);
+      ctx.fillStyle = col;
+      ctx.fillText('GO', 0, 0);
       ctx.restore();
     }
-  // (overlay fullscreen de countdown supprimé: on garde la version en haut du plateau)
   }
+
+
   handleInput(){}
   dispose(){
   try{ const btn=document.getElementById('btn-new'); if(btn){ btn.classList.add('hidden'); btn.onclick=null; } }catch{}

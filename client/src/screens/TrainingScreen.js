@@ -234,151 +234,227 @@ export class TrainingScreen extends SoloScreen {
   render(ctx){
     super.render(ctx);
     if(!this.easyMode || !this._hint || !this.active) return;
+
     const br = this.getBoardRect();
+    this._renderHintProjection(ctx, br);
+    this._renderVerticalGuides(ctx, br);
+    this._renderHoldBlink(ctx);
+    this._renderHelpCartridge(ctx, br);
+  }
+
+  _renderHintProjection(ctx, br){
     const { x:bx, y:by, cell } = br;
-  const useKey = this._hintKey || this.active.key;
-  const mat = rotateN(TETROMINOS[useKey], this._hint.rot);
-    const t = (performance.now()%1000)/1000; const pulse = 0.45 + 0.45*Math.abs(Math.sin(t*Math.PI*2));
+    const useKey = this._hintKey || this.active.key;
+    const mat = rotateN(TETROMINOS[useKey], this._hint.rot);
+    const t = (performance.now()%1000)/1000;
+    const pulse = 0.45 + 0.45*Math.abs(Math.sin(t*Math.PI*2));
+
     ctx.save();
     ctx.globalAlpha = 0.35 + 0.45*pulse;
     ctx.strokeStyle='rgba(56,189,248,0.9)';
     ctx.lineWidth = 2;
-    let minGX=Infinity, maxGX=-Infinity; const lowestByCol = new Map();
-    for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(mat[j][i]){
-      const gx = this._hint.x + i; const gy = this._hint.yLanding + j; if(gx<0||gx>=this.grid.w||gy>=this.grid.h) continue;
-      const px = bx + gx*cell, py = by + gy*cell;
-      roundRect(ctx, px+2, py+2, cell-4, cell-4, 6); ctx.stroke();
-      if(gx<minGX) minGX=gx; if(gx>maxGX) maxGX=gx;
-      const curLow = lowestByCol.get(gx);
-      if(curLow==null || gy>curLow) lowestByCol.set(gx, gy);
-    }
-    ctx.restore();
-    // Lignes de projection depuis la pièce active (position actuelle) vers le bas (côtés extrêmes)
-    try{
-      const sim = this._asSim();
-      // Utiliser la matrice actuelle de la pièce (le client ne stocke pas this.rot)
-      const curMat = this.active?.mat || rotateN(TETROMINOS[this.active.key], 0);
-      let minGX=Infinity, maxGX=-Infinity; const lowestByCol = new Map();
-      for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(curMat[j][i]){
-        const gx = (this.x|0) + i; const gy = (Math.floor(this.y)) + j;
-        if(gx<0||gx>=this.grid.w) continue;
-        if(gx<minGX) minGX=gx; if(gx>maxGX) maxGX=gx;
+
+    let minGX=Infinity, maxGX=-Infinity;
+    const lowestByCol = new Map();
+
+    for(let j=0;j<4;j++){
+      for(let i=0;i<4;i++){
+        if(!mat[j][i]) continue;
+        const gx = this._hint.x + i;
+        const gy = this._hint.yLanding + j;
+        if(gx<0||gx>=this.grid.w||gy>=this.grid.h) continue;
+
+        const px = bx + gx*cell, py = by + gy*cell;
+        roundRect(ctx, px+2, py+2, cell-4, cell-4, 6);
+        ctx.stroke();
+
+        if(gx<minGX) minGX=gx;
+        if(gx>maxGX) maxGX=gx;
         const curLow = lowestByCol.get(gx);
         if(curLow==null || gy>curLow) lowestByCol.set(gx, gy);
       }
+    }
+    ctx.restore();
+  }
+
+  _renderVerticalGuides(ctx, br){
+    const { x:bx, y:by, cell } = br;
+
+    // Lignes de projection depuis la pièce active vers le bas
+    try{
+      const sim = this._asSim();
+      const curMat = this.active?.mat || rotateN(TETROMINOS[this.active.key], 0);
+
+      let minGX=Infinity, maxGX=-Infinity;
+      const lowestByCol = new Map();
+
+      for(let j=0;j<4;j++){
+        for(let i=0;i<4;i++){
+          if(!curMat[j][i]) continue;
+          const gx = (this.x|0) + i;
+          const gy = (Math.floor(this.y)) + j;
+          if(gx<0||gx>=this.grid.w) continue;
+
+          if(gx<minGX) minGX=gx;
+          if(gx>maxGX) maxGX=gx;
+          const curLow = lowestByCol.get(gx);
+          if(curLow==null || gy>curLow) lowestByCol.set(gx, gy);
+        }
+      }
+
       const cols = [];
       if(Number.isFinite(minGX)) cols.push(minGX);
       if(Number.isFinite(maxGX) && maxGX!==minGX) cols.push(maxGX);
+
       ctx.save();
-        ctx.strokeStyle = 'rgba(56,189,248,0.6)';
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([4,6]);
-        ctx.lineDashOffset = 0;
+      ctx.strokeStyle = 'rgba(56,189,248,0.6)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4,6]);
+      ctx.lineDashOffset = 0;
+
       for(const c of cols){
         if(c<0 || c>=this.grid.w) continue;
         const lowGy = (lowestByCol.get(c) ?? Math.floor(this.y));
         const startGy = lowGy + 1;
         let hitY = this.grid.h;
+
         for(let y=startGy; y<this.grid.h; y++){
           if(sim[y][c]){ hitY = y; break; }
         }
-        // X aligné aux bords visibles de la tuile (tile dessiné à x+1 .. x+cell-1)
+
+        // X aligné aux bords visibles de la tuile
         const X = (c===minGX)
-          ? (bx + c*cell + 1)                // bord gauche visible
-          : (bx + (c+1)*cell - 1);            // bord droit visible
-        // y0: bas de la tuile la plus basse de cette colonne de la pièce
+          ? (bx + c*cell + 1)
+          : (bx + (c+1)*cell - 1);
+
         const y0 = by + lowGy*cell + (cell - 1);
-        // y1: haut de la première tuile touchée dessous (ou bas du plateau si aucune)
         const y1 = (hitY < this.grid.h)
           ? (by + hitY*cell + 1)
           : (by + this.grid.h*cell - 1);
-        ctx.beginPath(); ctx.moveTo(X, y0); ctx.lineTo(X, y1); ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(X, y0);
+        ctx.lineTo(X, y1);
+        ctx.stroke();
       }
-        ctx.setLineDash([]);
+
+      ctx.setLineDash([]);
       ctx.restore();
     }catch{}
-    
-    // Clignoter le panneau HOLD si HOLD recommandé (fond + contour)
-    if(this._hintUseHold && this._holdPanel){
-      const k = this._holdBlinkT||0;
-      // Courbe de pulsation douce
-      const pulse = 0.5 + 0.5*Math.sin((k/HOLD_BLINK_CONFIG.PERIOD_SEC)*Math.PI*2);
-      const fillAlpha = 0.20 + 0.30*pulse; // fond visible
-      const strokeAlpha = 0.70 + 0.25*pulse; // contour plus marqué
-      ctx.save();
-      // Fond
-      ctx.globalAlpha = Math.max(0.15, Math.min(0.65, fillAlpha));
-      ctx.fillStyle = 'rgba(56,189,248,1)';
-      roundRect(ctx, this._holdPanel.x+3, this._holdPanel.y+3, this._holdPanel.w-6, this._holdPanel.h-6, 10);
-      ctx.fill();
-      // Contour
-      ctx.globalAlpha = Math.max(0.5, Math.min(0.95, strokeAlpha));
-      ctx.strokeStyle = 'rgba(56,189,248,1)'; ctx.lineWidth = 2.2;
-      roundRect(ctx, this._holdPanel.x+2, this._holdPanel.y+2, this._holdPanel.w-4, this._holdPanel.h-4, 10);
-      ctx.stroke();
-      ctx.restore();
   }
-    // Cartouche d'aide: nb de rotations + direction — affichée au-dessus de la pièce qui descend
+
+  _renderHoldBlink(ctx){
+    // Clignoter le panneau HOLD si HOLD recommandé
+    if(!this._hintUseHold || !this._holdPanel) return;
+
+    const k = this._holdBlinkT||0;
+    const pulse = 0.5 + 0.5*Math.sin((k/HOLD_BLINK_CONFIG.PERIOD_SEC)*Math.PI*2);
+    const fillAlpha = 0.20 + 0.30*pulse;
+    const strokeAlpha = 0.70 + 0.25*pulse;
+
+    ctx.save();
+
+    // Fond
+    ctx.globalAlpha = Math.max(0.15, Math.min(0.65, fillAlpha));
+    ctx.fillStyle = 'rgba(56,189,248,1)';
+    roundRect(ctx, this._holdPanel.x+3, this._holdPanel.y+3, this._holdPanel.w-6, this._holdPanel.h-6, 10);
+    ctx.fill();
+
+    // Contour
+    ctx.globalAlpha = Math.max(0.5, Math.min(0.95, strokeAlpha));
+    ctx.strokeStyle = 'rgba(56,189,248,1)';
+    ctx.lineWidth = 2.2;
+    roundRect(ctx, this._holdPanel.x+2, this._holdPanel.y+2, this._holdPanel.w-4, this._holdPanel.h-4, 10);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  _renderHelpCartridge(ctx, br){
+    const { x:bx, y:by, cell } = br;
+
+    // Cartouche d'aide: nb de rotations + direction
     try{
       const curRot = detectRotIndex(this.active.key, this.active.mat);
       const wantRot = ((this._hint.rot|0)+4)%4;
-  const cwDist = (wantRot - curRot + 4) % 4;
-  const ccwDist = (curRot - wantRot + 4) % 4;
-  // Utiliser le nombre d'appuis en rotation horaire (↑) pour rejoindre l'orientation cible
-  const rotCount = cwDist;
+      const cwDist = (wantRot - curRot + 4) % 4;
+      const rotCount = cwDist;
+
       const dx = Math.sign((this._hint.x|0) - (this.x|0));
       const arrowChar = dx<0? '←' : dx>0? '→' : '⇵';
 
       // Mesure séparée: texte (petit) + flèche (plus grande)
-  const textFont = 'bold 12px system-ui,Segoe UI,Roboto';
-  const arrowFont = '800 22px system-ui,Segoe UI,Roboto';
+      const textFont = 'bold 12px system-ui,Segoe UI,Roboto';
+      const arrowFont = '800 22px system-ui,Segoe UI,Roboto';
       const pad = 6, gap = 8;
+
       ctx.save();
       ctx.font = textFont;
       const textLabel = `${rotCount} rot ·`;
       const textW = Math.ceil(ctx.measureText(textLabel).width);
       ctx.font = arrowFont;
       const arrowW = Math.ceil(ctx.measureText(arrowChar).width);
-  const th = 28; // un peu plus haut pour la flèche agrandie
+      const th = 28;
       const tw = pad*2 + textW + gap + arrowW;
 
-      // Boîte englobante de la pièce active en coordonnées grille
-      const x0 = this.x|0; const y0 = Math.floor(this.y); const amat = this.active.mat;
+      // Boîte englobante de la pièce active
+      const x0 = this.x|0;
+      const y0 = Math.floor(this.y);
+      const amat = this.active.mat;
       let minGX=Infinity, maxGX=-Infinity, minGY=Infinity;
-      for(let j=0;j<4;j++) for(let i=0;i<4;i++) if(amat[j][i]){ const gx=x0+i, gy=y0+j; if(gx<minGX) minGX=gx; if(gx>maxGX) maxGX=gx; if(gy<minGY) minGY=gy; }
-      // Centre horizontal de la pièce
+
+      for(let j=0;j<4;j++){
+        for(let i=0;i<4;i++){
+          if(!amat[j][i]) continue;
+          const gx=x0+i, gy=y0+j;
+          if(gx<minGX) minGX=gx;
+          if(gx>maxGX) maxGX=gx;
+          if(gy<minGY) minGY=gy;
+        }
+      }
+
+      // Position au-dessus de la pièce
       const cx = bx + ((minGX + maxGX + 1)/2) * cell;
-      // Position au-dessus du haut de la pièce (même si elle est partiellement hors du plateau)
       const topY = by + (minGY * cell);
       let rx = Math.round(cx - tw/2);
       let ry = Math.round(topY - th - 8);
-      // Clamps pour rester dans la zone du plateau
+
+      // Clamps pour rester dans le plateau
       const minX = bx + 4, maxX = bx + this.grid.w*cell - tw - 4;
       rx = Math.max(minX, Math.min(maxX, rx));
       ry = Math.max(8, ry);
 
       // Fond + contour
       ctx.fillStyle='rgba(2,6,23,0.85)';
-      roundRect(ctx, rx, ry, tw, th, 8); ctx.fill();
-      ctx.strokeStyle='rgba(56,189,248,0.35)'; ctx.lineWidth=1; roundRect(ctx, rx, ry, tw, th, 8); ctx.stroke();
+      roundRect(ctx, rx, ry, tw, th, 8);
+      ctx.fill();
+      ctx.strokeStyle='rgba(56,189,248,0.35)';
+      ctx.lineWidth=1;
+      roundRect(ctx, rx, ry, tw, th, 8);
+      ctx.stroke();
 
       // Texte (rotations)
-      ctx.textAlign='left'; ctx.textBaseline='middle';
-      ctx.font = textFont; ctx.fillStyle='#e5f2ff';
-      const textX = rx + pad; const cy = ry + th/2;
+      ctx.textAlign='left';
+      ctx.textBaseline='middle';
+      ctx.font = textFont;
+      ctx.fillStyle='#e5f2ff';
+      const textX = rx + pad;
+      const cy = ry + th/2;
       ctx.fillText(textLabel, textX, cy);
 
-      // Flèche plus grande + léger contour pour visibilité
+      // Flèche
       const arrowX = textX + textW + gap;
-      ctx.font = arrowFont; ctx.fillStyle='#ffffff';
-      // Stroke pour renforcer le contraste
-  ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.95)';
+      ctx.font = arrowFont;
+      ctx.fillStyle='#ffffff';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(0,0,0,0.95)';
       ctx.strokeText(arrowChar, arrowX, cy + 0.5);
       ctx.fillText(arrowChar, arrowX, cy);
 
       ctx.restore();
     }catch{}
   }
+
 
   // ---- IA Easy (portée depuis legacy/src/main.js) ----
   _forceHintRecompute(){ this._lastState = { x:null, y:null, rot:null, gridHash:null, key:null, next0:null, next1:null }; this._hintCooldown=0; this._needHintRecompute = true; }

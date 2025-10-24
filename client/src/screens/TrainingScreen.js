@@ -11,13 +11,20 @@ import {
   getAIWeights, countLegalPlacements, bestPlacementScoreForNext,
   bestPlacementThatReducesHoles, bestPlacementScoreWithFollow,
 } from '../engine/ai/index.js';
+import {
+  COPILOT_CONFIG,
+  HINT_CONFIG,
+  HOLD_BLINK_CONFIG,
+  AI_PROFILE_NAMES,
+  DEFAULT_AI_PROFILE,
+} from '../config/ai-constants.js';
 
 // Écran Training: identique au Solo, avec assistance IA (Mode Easy)
 export class TrainingScreen extends SoloScreen {
   constructor(core, { rules, objectives }){
     super(core, { rules, objectives });
     this.easyMode = true; // activé par défaut en Training
-    this.aiProfile = 'equilibre'; // 'prudent' | 'conservateur' | 'equilibre' | 'agressif'
+    this.aiProfile = DEFAULT_AI_PROFILE; // 'prudent' | 'conservateur' | 'equilibre' | 'agressif'
     this._hint = null; // { x, rot, yLanding, score, cleared }
   this._hintKey = null; // clé de la pièce pour laquelle l'indice est calculé (active ou HOLD)
     this._lastState = { x: null, y: null, rot: null, gridHash: null, key: null, next0: null, next1: null };
@@ -33,8 +40,8 @@ export class TrainingScreen extends SoloScreen {
   this._copilotHeldForKey = null; // éviter HOLD en boucle pour une même pièce (si on change de stratégie)
   this._copilotLastSeqKey = null; // clé de pièce pour déclencher actions spawn/hold une fois par pièce
   // Cooldowns d'actions Copilot (rythme humain proche des DAS/ARR)
-  this._copilotCdMs = 35; // rotation/déplacement
-  this._copilotDropCdMs = 28; // soft drop
+  this._copilotCdMs = COPILOT_CONFIG.ACTION_COOLDOWN_MS; // rotation/déplacement
+  this._copilotDropCdMs = COPILOT_CONFIG.DROP_COOLDOWN_MS; // soft drop
   this._copilotLastAct = 0;
   this._copilotLastDrop = 0;
     // UI handlers
@@ -51,8 +58,7 @@ export class TrainingScreen extends SoloScreen {
       if(btn && dd){
         btn.classList.remove('hidden');
         // Charger le profil persisté
-        const AI_PROFILES = ['prudent', 'conservateur', 'equilibre', 'agressif'];
-        const saved = SafeStorage.getEnum('texid_ai_profile', ['off', ...AI_PROFILES], null);
+        const saved = SafeStorage.getEnum('texid_ai_profile', ['off', ...AI_PROFILE_NAMES], null);
         if(saved === 'off'){
           this.easyMode = false;
           btn.setAttribute('aria-pressed','false');
@@ -65,14 +71,14 @@ export class TrainingScreen extends SoloScreen {
         } else {
           // défaut: équilibré actif
           this.easyMode = true;
-          this.aiProfile = this.aiProfile || 'equilibre';
+          this.aiProfile = this.aiProfile || DEFAULT_AI_PROFILE;
           btn.setAttribute('aria-pressed','true');
           btn.classList.add('active');
         }
         this._syncEasyClasses();
 
         // Synchroniser les checks menu à l'init
-        const cur = this.easyMode ? (this.aiProfile||'equilibre') : 'off';
+        const cur = this.easyMode ? (this.aiProfile||DEFAULT_AI_PROFILE) : 'off';
         dd.querySelectorAll('.ai-opt').forEach(b=> b.setAttribute('aria-checked', b.dataset.value===cur ? 'true':'false'));
 
   const positionDropdown = ()=>{
@@ -205,11 +211,11 @@ export class TrainingScreen extends SoloScreen {
         this._hintForKey = curKey;
         this._needHintRecompute = false;
         this._hintThrottled = true;
-        this._hintCooldown = 0.1; // 100ms cooldown
+        this._hintCooldown = HINT_CONFIG.THROTTLE_COOLDOWN_SEC;
       }
   // Blink HOLD si recommandé
   if(this._hintUseHold){
-    this._holdBlinkT = ((this._holdBlinkT||0) + dt) % 1.2;
+    this._holdBlinkT = ((this._holdBlinkT||0) + dt) % HOLD_BLINK_CONFIG.PERIOD_SEC;
     // Petit toast contextuel (une seule fois par pièce) pour suggérer HOLD
     if(!this._holdToastShown){
       try{ this.toast('HOLD (C/Shift)', { color:'#38bdf8', size:18, dur:1.4 }); }catch{}
@@ -296,7 +302,7 @@ export class TrainingScreen extends SoloScreen {
     if(this._hintUseHold && this._holdPanel){
       const k = this._holdBlinkT||0;
       // Courbe de pulsation douce
-      const pulse = 0.5 + 0.5*Math.sin((k/1.2)*Math.PI*2);
+      const pulse = 0.5 + 0.5*Math.sin((k/HOLD_BLINK_CONFIG.PERIOD_SEC)*Math.PI*2);
       const fillAlpha = 0.20 + 0.30*pulse; // fond visible
       const strokeAlpha = 0.70 + 0.25*pulse; // contour plus marqué
       ctx.save();
@@ -380,7 +386,7 @@ export class TrainingScreen extends SoloScreen {
     const btn = this._ui.btn; if(!btn) return;
     btn.classList.remove('easy-prudent','easy-conservateur','easy-equilibre','easy-agressif');
   if(!this.easyMode) return;
-    const p = this.aiProfile||'equilibre';
+    const p = this.aiProfile||DEFAULT_AI_PROFILE;
     const cls = (p==='prudent')? 'easy-prudent' : (p==='conservateur')? 'easy-conservateur' : (p==='agressif')? 'easy-agressif' : 'easy-equilibre';
     btn.classList.add(cls);
   }
